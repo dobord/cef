@@ -63,6 +63,9 @@ jobs:
           key: cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/source_build.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/source_build.py') }}-
+            cef-static-152-linux-
+      - name: Test native launchers in actual vcpkg scope before source checkout
+        run: python vcpkg/static/toolcheck.py --triplet ${{ matrix.triplet }}
       - name: Resolve and verify the complete pinned source trees
         run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ runner.temp }}/cef-static" --logs static-diagnostics/bootstrap
       - name: Install official Chromium Linux build prerequisites

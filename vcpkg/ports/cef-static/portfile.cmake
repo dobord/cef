@@ -29,12 +29,19 @@ endif()
 # pretend a release /MT engine is a separately compiled /MTd engine.
 set(VCPKG_BUILD_TYPE release)
 vcpkg_find_acquire_program(PYTHON3)
+include("${CURRENT_PORT_DIR}/acquire_git.cmake")
 set(_work "${CURRENT_BUILDTREES_DIR}/w")
 if(DEFINED ENV{CEF_STATIC_WORK} AND NOT "$ENV{CEF_STATIC_WORK}" STREQUAL "")
     set(_work "$ENV{CEF_STATIC_WORK}")
 endif()
 set(_logs "${CURRENT_BUILDTREES_DIR}/diagnostics")
 file(MAKE_DIRECTORY "${_work}" "${_logs}")
+vcpkg_execute_required_process(
+    COMMAND "${PYTHON3}" "${CURRENT_PORT_DIR}/source_build.py" tools
+        --work "${_work}" --logs "${_logs}"
+    WORKING_DIRECTORY "${CURRENT_BUILDTREES_DIR}"
+    LOGNAME static-engine-toolcheck
+)
 message(STATUS "Building CEF/Chromium from pinned sources. C API only; no libcef DLL/SO is downloaded.")
 vcpkg_execute_required_process(
     COMMAND "${PYTHON3}" "${CURRENT_PORT_DIR}/source_build.py" build

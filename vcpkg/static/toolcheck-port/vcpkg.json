@@ -1,0 +1,1 @@
+{"name":"cef-static-toolcheck","version-string":"1","description":"CI-only native Git and Python launcher check. Contains no CEF binaries.","license":"BSD-3-Clause"}
