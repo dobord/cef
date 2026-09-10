@@ -56,6 +56,28 @@ jobs:
       - name: Install official Chromium Linux build prerequisites
         if: runner.os == 'Linux'
         run: sudo "${{ runner.temp }}/cef-static/download/chromium/src/build/install-build-deps.sh" --no-prompt --no-arm --no-chromeos-fonts
+      - name: Generate and check the actual static link edge before compilation
+        shell: python
+        run: |
+          import importlib.util, os, pathlib
+          script = pathlib.Path('vcpkg/ports/cef-static/source_build.py').resolve()
+          spec = importlib.util.spec_from_file_location('cef_static_build', script)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'cef-static'
+          logs = pathlib.Path('static-diagnostics/configure').resolve()
+          logs.mkdir(parents=True, exist_ok=True)
+          module.setup_environment(work)
+          source = module.prepare(work, logs)
+          module.configuration(source, logs)
+      - name: Preserve configuration evidence before the engine build
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cef-static-${{ matrix.triplet }}-configuration
+          path: static-diagnostics/configure/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Build through vcpkg and verify an external relocated SDK consumer
         run: python vcpkg/static/ci.py --triplet ${{ matrix.triplet }}
       - name: Preserve diagnostic evidence, including failures
