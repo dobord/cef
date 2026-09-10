@@ -1,0 +1,218 @@
+name: Apply reviewed native static build corrections
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-native-repair.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Apply exact reviewed source changes
+        shell: python
+        run: |
+          from pathlib import Path
+          def replace(path, old, new):
+              text = path.read_text()
+              if text.count(old) != 1: raise RuntimeError(f'{path}: original context mismatch')
+              path.write_text(text.replace(old, new, 1), newline='\n')
+          port = Path('vcpkg/ports/cef-static')
+          replace(port/'patch_source.py', 'def patch(root: Path) -> None:\n', '''def patch_vulkan_disabled(root: Path) -> None:
+              # Chromium 152 only defines VulkanContextProvider with ENABLE_VULKAN.
+              # Match the guarded device_queue pattern in CreateSharedImageInternal.
+              replace(root, 'gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc',
+                      """    gfx::BufferUsage usage) {
+            scoped_refptr<gfx::NativePixmap> pixmap =""",
+                      """    gfx::BufferUsage usage) {
+            VulkanDeviceQueue* device_queue = nullptr;
+          #if BUILDFLAG(ENABLE_VULKAN)
+            if (vulkan_context_provider) {
+              device_queue = vulkan_context_provider->GetDeviceQueue();
+            }
+          #endif  // BUILDFLAG(ENABLE_VULKAN)
+            scoped_refptr<gfx::NativePixmap> pixmap =""")
+              replace(root, 'gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc',
+                      """                               vulkan_context_provider
+                                             ? vulkan_context_provider->GetDeviceQueue()
+                                             : nullptr,""",
+                      '                               device_queue,')
+          
+          
+          def patch(root: Path) -> None:
+              patch_vulkan_disabled(root)
+          ''')
+          replace(port/'source_build.py', 'def configuration(source: Path, logs: Path) -> Path:', '''def gn_generate_command(gn: Path, out: Path) -> list[str | Path]:
+              # root-target alone still defines unrelated targets from evaluated
+              # BUILD.gn files. Restrict the graph to the static executable closure.
+              return [gn, 'gen', out, '--fail-on-unused-args',
+                      '--root-target=//cef:cef_static_smoke',
+                      '--root-pattern=//cef:cef_static_smoke']
+          
+          
+          def configuration(source: Path, logs: Path) -> Path:''')
+          replace(port/'source_build.py', "run([gn, 'gen', out, '--fail-on-unused-args'], source, logs, 'gn-gen', timeout=1200)", "run(gn_generate_command(gn, out), source, logs, 'gn-gen', timeout=1200)")
+          replace(port/'source_build.py', 'def execute_smoke(exe: Path, logs: Path) -> dict:', '''def regression_targets(inputs: list[str], windows: bool) -> list[str]:
+              names = (('chrome_elf_main.obj', 'initialize_from_primary_module.obj',
+                        'crash_reporting.obj', 'smoke.obj') if windows else
+                       ('ozone_image_backing_factory.o', 'smoke.o'))
+              result = []
+              for name in names:
+                  candidates = [item for item in inputs if item.endswith('/'+name) or
+                                item.endswith('.'+name)]
+                  if name.startswith('smoke.'):
+                      candidates = [item for item in candidates if 'cef_static_smoke' in item]
+                  if len(candidates) != 1:
+                      raise RuntimeError(f'Expected one regression object for {name}, found {candidates}')
+                  result.append(candidates[0])
+              return result
+          
+          
+          def compile_regressions(source: Path, out: Path, logs: Path, jobs: int) -> None:
+              ninja = find_binary(source, ['third_party/ninja/ninja.exe'] if WINDOWS else
+                                  ['third_party/ninja/ninja'])
+              # Archive members are not direct inputs of the final executable.
+              targets = run([ninja, '-C', out, '-t', 'targets', 'all'], source, logs,
+                            'native-targets', timeout=120, quiet=True)
+              inputs = [line.rsplit(': ', 1)[0] for line in targets.splitlines() if ': ' in line]
+              selected = regression_targets(inputs, WINDOWS)
+              (logs/'regression-targets.json').write_text(json.dumps(selected, indent=2)+'\\n')
+              run([ninja, '-C', out, '-j', str(jobs), '-d', 'keeprsp', *selected],
+                  source, logs, 'regression-compile', timeout=3600)
+              receipt = {'schema': 1, 'compiled_objects': selected,
+                         'engine_link_verified': False, 'engine_runtime_verified': False}
+              (logs/'regression-compile-receipt.json').write_text(json.dumps(receipt, indent=2)+'\\n')
+          
+          
+          def execute_smoke(exe: Path, logs: Path) -> dict:''')
+          replace(port/'source_build.py', '    command = [exe]\n', "    # Never accept a proof left by an earlier executable/run.\n    (exe.parent/'smoke-result.json').unlink(missing_ok=True)\n    command = [exe]\n")
+          replace(port/'source_build.py', "choices=['prepare', 'build']", "choices=['prepare', 'check', 'build']")
+          replace(port/'source_build.py', "    if args.phase == 'build':\n", "    if args.phase == 'check':\n        out = configuration(source, logs)\n        compile_regressions(source, out, logs, args.jobs)\n    if args.phase == 'build':\n")
+          tests = port/'tests/test_native_regressions.py'
+          if tests.exists(): raise RuntimeError('Regression test already exists')
+          tests.write_text(r'''"""Tests for failures in run 34451325586; not an engine build certificate."""
+          from pathlib import Path
+          import importlib.util
+          import shutil
+          import subprocess
+          import tempfile
+          import unittest
+          PORT = Path(__file__).resolve().parents[1]
+          def load(name):
+              spec = importlib.util.spec_from_file_location(name, PORT/(name+'.py'))
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              return module
+          patcher = load('patch_source')
+          builder = load('source_build')
+          FILE = 'gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc'
+          FACTORY = """int factory(viz::VulkanContextProvider* vulkan_context_provider,
+              gfx::BufferUsage usage) {
+            scoped_refptr<gfx::NativePixmap> pixmap =
+                ui::OzonePlatform::GetInstance()
+                    ->GetSurfaceFactoryOzone()
+                    ->CreateNativePixmap(gpu::kNullSurfaceHandle,
+                                         vulkan_context_provider
+                                             ? vulkan_context_provider->GetDeviceQueue()
+                                             : nullptr,
+                                         size, format, usage, size);
+            return pixmap;
+          }
+          """
+          PRELUDE = """
+          #define BUILDFLAG(flag) flag
+          struct VulkanDeviceQueue {};
+          namespace viz {
+          #if ENABLE_VULKAN
+          struct VulkanContextProvider {
+            VulkanDeviceQueue queue;
+            VulkanDeviceQueue* GetDeviceQueue() { return &queue; }
+          };
+          #else
+          struct VulkanContextProvider;
+          #endif
+          }
+          namespace gfx { using BufferUsage=int; struct NativePixmap {}; }
+          template<class T> using scoped_refptr=int;
+          namespace gpu { constexpr int kNullSurfaceHandle=0; }
+          constexpr int size=1, format=2;
+          namespace ui {
+          struct OzonePlatform {
+            static OzonePlatform* GetInstance() { static OzonePlatform self; return &self; }
+            OzonePlatform* GetSurfaceFactoryOzone() { return this; }
+            int CreateNativePixmap(int, VulkanDeviceQueue* queue, int, int, int, int) {
+              return queue ? 7 : 3;
+            }
+          };
+          }
+          """
+          class NativeGraphTests(unittest.TestCase):
+              def test_static_root_without_disabling_validation(self):
+                  command = builder.gn_generate_command(Path('gn'), Path('out/native'))
+                  self.assertIn('--root-target=//cef:cef_static_smoke', command)
+                  self.assertIn('--root-pattern=//cef:cef_static_smoke', command)
+                  self.assertIn('--fail-on-unused-args', command)
+              def test_windows_object_layout(self):
+                  values = ['obj/chrome/chrome_elf/chrome_elf.chrome_elf_main.obj',
+                            'obj/chrome/install_static/secondary_module.initialize_from_primary_module.obj',
+                            'obj/cef/libcef_static.crash_reporting.obj',
+                            'obj/cef/cef_static_smoke.smoke.obj', 'obj/cef/cef_engine.lib']
+                  self.assertEqual(builder.regression_targets(values, True), values[:-1])
+              def test_linux_object_layout(self):
+                  values = ['obj/gpu/gles2_sources/ozone_image_backing_factory.o',
+                            'obj/cef/cef_static_smoke/smoke.o', 'obj/cef/libcef_engine.a']
+                  self.assertEqual(builder.regression_targets(values, False), values[:-1])
+              def test_missing_or_ambiguous_objects_fail(self):
+                  with self.assertRaises(RuntimeError): builder.regression_targets([], False)
+                  with self.assertRaises(RuntimeError):
+                      builder.regression_targets(['obj/a/ozone_image_backing_factory.o',
+                                                  'obj/b/ozone_image_backing_factory.o',
+                                                  'obj/cef_static_smoke/smoke.o'], False)
+          class VulkanDisabledTests(unittest.TestCase):
+              def test_patch_and_drift_rejection(self):
+                  with tempfile.TemporaryDirectory() as temporary:
+                      root = Path(temporary); target = root/FILE
+                      target.parent.mkdir(parents=True); target.write_text(FACTORY)
+                      patcher.patch_vulkan_disabled(root)
+                      self.assertIn('#if BUILDFLAG(ENABLE_VULKAN)', target.read_text())
+                      self.assertNotIn('? vulkan_context_provider->GetDeviceQueue()', target.read_text())
+                      with self.assertRaises(RuntimeError): patcher.patch_vulkan_disabled(root)
+              @unittest.skipUnless(shutil.which('c++'), 'C++ compiler required')
+              def test_compiles_without_vulkan_and_preserves_vulkan_behavior(self):
+                  with tempfile.TemporaryDirectory() as temporary:
+                      root = Path(temporary); target = root/FILE
+                      target.parent.mkdir(parents=True); target.write_text(FACTORY)
+                      patcher.patch_vulkan_disabled(root)
+                      fixture = root/'fixture.cc'
+                      fixture.write_text(PRELUDE+target.read_text()+"""
+          int main() {
+            if (factory(nullptr, 0) != 3) return 1;
+          #if ENABLE_VULKAN
+            viz::VulkanContextProvider provider;
+            if (factory(&provider, 0) != 7) return 2;
+          #endif
+            return 0;
+          }
+          """)
+                      for enabled in (0, 1):
+                          binary = root/f'test-{enabled}'
+                          subprocess.run(['c++', '-std=c++17', '-Wall', '-Werror',
+                                          f'-DENABLE_VULKAN={enabled}', str(fixture),
+                                          '-o', str(binary)], check=True, capture_output=True)
+                          subprocess.run([str(binary)], check=True)
+          if __name__ == '__main__': unittest.main()
+          ''', newline='\n')
+      - name: Test reviewed corrections before committing
+        run: |
+          python -m unittest discover -s vcpkg/ports/cef-static/tests -v
+          python -m compileall -q vcpkg/ports/cef-static
+          git diff --check
+      - name: Commit only reviewed recipe and regression tests
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add vcpkg/ports/cef-static/patch_source.py vcpkg/ports/cef-static/source_build.py vcpkg/ports/cef-static/tests/test_native_regressions.py
+          git commit -m 'fix(static): restrict GN to engine closure and guard Vulkan-disabled pixmap factory'
+          git push origin HEAD:static-engine
