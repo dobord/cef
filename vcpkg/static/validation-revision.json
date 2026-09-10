@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "recipe_commit": "7b3594e0023f6d77f70e29d73f09ddd11121cfa0",
+  "checks": ["native source build", "Ninja link inputs", "PE or ELF imports", "separate renderer", "JavaScript", "offscreen pixel", "relocated external SDK consumer"],
+  "note": "This file selects a validation revision; it is not a successful build receipt."
+}
