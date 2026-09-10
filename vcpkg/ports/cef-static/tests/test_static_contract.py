@@ -67,6 +67,14 @@ class LinkEdgeTests(unittest.TestCase):
         kept, discarded = module.link_options(flags, False, lambda p: p)
         self.assertEqual(kept,flags[:2]); self.assertEqual(len(discarded),1)
 
+    def test_observed_native_linux_driver_and_rpath(self):
+        flags = ['--target=x86_64-unknown-linux-gnu', '-Wl,--disable-new-dtags', '-Wl,-rpath=$ORIGIN']
+        kept, discarded = module.link_options(flags, False, lambda p: p)
+        self.assertEqual(kept, flags[1:])
+        self.assertEqual(discarded[0]['flag'], flags[0])
+        with self.assertRaises(RuntimeError):
+            module.link_options(['--target=aarch64-linux-gnu'], False, lambda p: p)
+
     def test_link_scripts_relocated(self):
         kept, _ = module.link_options(['-Wl,--version-script=../../example.list'],False,
                                       lambda p:'${_cef_static_prefix}/share/cef-static/linker/example.list')

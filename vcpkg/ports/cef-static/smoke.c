@@ -281,6 +281,11 @@ static void CEF_CALLBACK command_line(cef_app_t* self, const cef_string_t* type,
   cef_string_clear(&key); cef_string_clear(&value); DROP(command);
 }
 
+/* Chromium can reset the stack canary after fork. Like upstream cefsimple,
+ * keep the multi-process entry frame free of a stale stack-protector cookie. */
+#if defined(__linux__) && (defined(__clang__) || defined(__GNUC__))
+__attribute__((no_stack_protector))
+#endif
 int main(int argc, char** argv) {
   const char* hash = cef_api_hash(CEF_API_VERSION, 0);
   if (!hash || strcmp(hash, CEF_API_HASH_PLATFORM)) {

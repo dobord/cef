@@ -115,7 +115,8 @@ def link_options(flags: list[str], windows: bool,
             if flag in ('-m64', '-pthread', '-pie', '-rdynamic', '-Werror',
                         '-Wl,-z,defs', '-Wl,-z,noexecstack', '-Wl,-z,relro', '-Wl,-z,now',
                         '-Wl,--as-needed', '-Wl,--gc-sections', '-Wl,--no-undefined',
-                        '-Wl,--fatal-warnings', '-Wl,--export-dynamic') or flag.startswith((
+                        '-Wl,--fatal-warnings', '-Wl,--export-dynamic',
+                        '-Wl,--disable-new-dtags', '-Wl,-rpath=$ORIGIN') or flag.startswith((
                         '-Wl,--export-dynamic-symbol=', '-Wl,--wrap=', '-Wl,-u,',
                         '-Wl,--undefined=', '-Wl,-z,max-page-size=')):
                 kept.append(flag)
@@ -129,7 +130,8 @@ def link_options(flags: list[str], windows: bool,
             if matched:
                 continue
             if flag.startswith(('--sysroot=', '--ld-path=', '-B', '-L')) or flag in (
-                    '-fuse-ld=lld', '-nostdlib++', '--unwindlib=none', '-no-canonical-prefixes'):
+                    '-fuse-ld=lld', '-nostdlib++', '--unwindlib=none', '-no-canonical-prefixes',
+                    '--target=x86_64-unknown-linux-gnu'):
                 reason = 'consumer compiler/sysroot selection; C API needs no C++ compile ABI'
             elif flag.startswith(('-Wl,--build-id', '-Wl,--icf=', '-Wl,--color-diagnostics',
                                   '-Wl,--no-call-graph-profile-sort', '-Wl,--read-workers=',
