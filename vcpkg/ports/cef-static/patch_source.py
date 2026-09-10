@@ -34,8 +34,7 @@ def patch(root: Path) -> None:
             '#if defined(CEF_STATIC)\n\n#define CEF_EXPORT\n\n#elif defined(COMPILER_MSVC)\n')
     replace(root, 'cef/libcef/features/BUILD.gn', '    "USING_CHROMIUM_INCLUDES",\n  ]\n',
             '    "USING_CHROMIUM_INCLUDES",\n  ]\n  if (cef_static_engine) {\n    defines += [ "CEF_STATIC" ]\n  }\n')
-    # The same switch/crash-key objects occur in the browser closure. They were
-    # separately compiled for chrome_elf.dll but must not be duplicated in one EXE.
+    # These switch/crash-key objects also occur in the browser closure.
     marker = '  static_library("chrome_elf_set") {\n'
     file = 'cef/BUILD.gn'
     text = (root/file).read_text()
@@ -71,8 +70,7 @@ if (cef_static_engine) {
 
   static_library("cef_engine") {
     testonly = true
-    # Preserve GN archive/source_set semantics; the SDK exporter must retain
-    # the complete static link closure, not just this one archive.
+    # Preserve GN archive/source_set semantics; export the complete closure.
     output_name = "cef_engine"
     sources = libcef_sources_common
     deps = libcef_deps_common + [ "//build/config:executable_deps" ]
@@ -86,7 +84,6 @@ if (cef_static_engine) {
   }
 
   if (is_win) {
-    # Keep Windows resources as link inputs, not members of a code archive.
     source_set("cef_static_resources") {
       sources = [ "libcef_dll/libcef_dll.rc" ]
       configs += [ ":libcef_includes_config" ]
@@ -107,7 +104,6 @@ if (cef_static_engine) {
   }
 }
 ''')
-    # Compile the real chrome_elf implementation into the engine, not test stubs.
     replace(root, 'chrome/chrome_elf/BUILD.gn', 'shared_library("chrome_elf") {', '''_cef_elf_target_type = "shared_library"
 if (cef_static_engine) {
   _cef_elf_target_type = "source_set"
@@ -119,9 +115,12 @@ target(_cef_elf_target_type, "chrome_elf") {''')
     configs += [ "//cef/libcef/features:config" ]
   }
   configs += [ "//build/config/win:windowed" ]''')
+    # source_set has no default console config, unlike DLL/executable targets.
+    replace(root, 'chrome/chrome_elf/BUILD.gn',
+            '  configs -= [ "//build/config/win:console" ]',
+            '  if (!cef_static_engine) {\n    configs -= [ "//build/config/win:console" ]\n  }')
     replace(root, 'chrome/chrome_elf/chrome_elf_main.h', 'void SignalChromeElf();', '''void SignalChromeElf();
 #if defined(CEF_STATIC)
-// Called once, explicitly, before CEF initialization in every process.
 void CefInitializeChromeElfForStatic();
 #endif''')
     replace(root, 'chrome/chrome_elf/chrome_elf_main.cc', '#include <assert.h>',
@@ -152,8 +151,6 @@ void CefInitializeChromeElfForStatic() {
 #endif
 
 void DumpProcessWithoutCrash() {''')
-    # A single EXE has a single InstallDetails allocation domain. Re-importing
-    # its own payload would overwrite the primary state and violate its DCHECK.
     replace(root, 'chrome/install_static/BUILD.gn', 'import("//testing/test.gni")',
             'import("//testing/test.gni")\nimport("//cef/libcef/features/features.gni")')
     replace(root, 'chrome/install_static/BUILD.gn', '  source_set("secondary_module") {', '''  source_set("secondary_module") {
@@ -173,7 +170,6 @@ extern "C" const install_static::InstallDetails::Payload __declspec(dllimport) *
 #else
   InstallDetails::InitializeFromPayload(GetInstallDetailsPayload());
 #endif''')
-    # Keep crash-reporting behavior; replace DLL lookup with direct linkage.
     replace(root, 'cef/libcef/common/crash_reporting.cc', 'namespace crash_reporting {', '''#if BUILDFLAG(IS_WIN) && defined(CEF_STATIC)
 extern "C" int __cdecl SetCrashKeyValueImpl(const char*, size_t, const char*, size_t);
 extern "C" int __cdecl IsCrashReportingEnabledImpl();
