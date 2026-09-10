@@ -1,0 +1,27 @@
+name: Static integration source snapshot
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-dev-snapshot.yml']
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Preserve source under review
+        run: |
+          mkdir review
+          git archive --format=zip HEAD -- vcpkg .github/workflows > review/static-integration-source.zip
+          git rev-parse HEAD > review/commit.txt
+      - name: Test static integration contracts
+        run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v 2>&1 | tee review/tests.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: static-integration-review
+          path: review/
+          retention-days: 7
