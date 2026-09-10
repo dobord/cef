@@ -1,0 +1,24 @@
+cef-static is the experimental source-build port, NOT the hybrid cef wrapper port.
+It has no binary-distribution/shared-engine fallback. A failed source build fails
+installation. Native x64 Linux or Windows, Release engine configuration only.
+
+    find_package(cef-static CONFIG REQUIRED)
+    target_link_libraries(app PRIVATE CEF::static)
+    cef_static_deploy_resources(app)
+
+Include public C API headers, for example "include/capi/cef_app_capi.h".
+Call cef_api_hash(CEF_API_VERSION, 0) before other C API entry points, and implement
+cef_execute_process in every child process as in the controlled test fixture.
+The ordinary C++ libcef_dll_wrapper is NOT ABI-compatible with this package and
+must NOT be linked into the same program.
+
+Windows consumers must use /MT, matching the release engine, not /MTd or /MD.
+The OS Win32 DLLs remain dynamic. Linux system libraries (libc, X11, NSS, etc.)
+remain platform dependencies. This is a static CEF engine, not a statically
+linked Linux operating system. ICU, locale packs, resource packs and snapshots
+remain data files next to the executable. No libcef.dll/libcef.so is deployed.
+
+The CI fixture loads only a fixed local document with sandbox disabled. Its
+security settings are NOT suitable for production/untrusted web content.
+Sandbox, GPU functionality and the ordinary C++ wrapper are not certified here.
+See the build receipt and repository status before using an experimental build.

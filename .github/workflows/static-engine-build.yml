@@ -1,46 +1,123 @@
-name: Static CEF engine from Chromium sources
+name: Static CEF engine via vcpkg
 on:
   push:
-    branches: [static-engine]
+    branches: [static-engine, vcpkg]
     paths:
       - 'vcpkg/ports/cef-static/**'
+      - 'vcpkg/static/**'
       - '.github/workflows/static-engine-build.yml'
+  pull_request:
+    branches: [static-engine, vcpkg]
+    paths:
+      - 'vcpkg/ports/cef-static/**'
+      - 'vcpkg/static/**'
+      - '.github/workflows/static-engine-build.yml'
+  release:
+    types: [published]
 permissions:
   contents: read
 concurrency:
-  group: static-engine-source-${{ github.ref }}
-  cancel-in-progress: true
+  group: static-engine-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
 jobs:
-  source-build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, windows-2022]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 350
+  contract:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Reclaim unrelated preinstalled SDKs on the disposable Linux runner
+      - run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
+      - run: python -m compileall -q vcpkg/ports/cef-static vcpkg/static
+  source-build:
+    needs: contract
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            triplet: x64-linux
+          - os: windows-2022
+            triplet: x64-windows-static
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 350
+    env:
+      CEF_STATIC_WORK: ${{ runner.temp }}/cef-static
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Linux runner capacity and build-test utilities
         if: runner.os == 'Linux'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup
           sudo apt-get update
           sudo apt-get install -y ccache xvfb xauth
           df -h /
-      - name: Checkout the pinned complete Chromium and CEF source trees
-        run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ runner.temp }}/cef-static" --logs diagnostics
-      - name: Install upstream Chromium Linux build prerequisites
+      - name: Resolve and verify the complete pinned source trees
+        run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ runner.temp }}/cef-static" --logs static-diagnostics/bootstrap
+      - name: Install official Chromium Linux build prerequisites
         if: runner.os == 'Linux'
         run: sudo "${{ runner.temp }}/cef-static/download/chromium/src/build/install-build-deps.sh" --no-prompt --no-arm --no-chromeos-fonts
-      - name: Compile, link, relocate and execute the static engine C API reference
-        run: python vcpkg/ports/cef-static/source_build.py build --work "${{ runner.temp }}/cef-static" --logs diagnostics --jobs 4
-      - name: Keep actual diagnostics, including failed source/configuration/build phases
+      - name: Build through vcpkg and verify an external relocated SDK consumer
+        run: python vcpkg/static/ci.py --triplet ${{ matrix.triplet }}
+      - name: Preserve diagnostic evidence, including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: static-engine-${{ matrix.os }}-diagnostics
-          path: diagnostics/
+          name: cef-static-${{ matrix.triplet }}-diagnostics
+          path: static-diagnostics/
+          if-no-files-found: warn
           retention-days: 7
+      - name: Preserve SDK only after successful source and external-consumer tests
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cef-static-${{ matrix.triplet }}
+          path: static-artifacts/
           if-no-files-found: error
+          retention-days: 7
+  publish:
+    if: github.event_name == 'release'
+    needs: source-build
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      EXPECTED_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Retrieve only SDKs from this successful run
+        run: |
+          gh run download "$RUN_ID" --repo "$GH_REPO" --name cef-static-x64-linux --dir artifacts/linux
+          gh run download "$RUN_ID" --repo "$GH_REPO" --name cef-static-x64-windows-static --dir artifacts/windows
+      - name: Verify static runtime proofs, source commit and archive hashes
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib
+          root = pathlib.Path('artifacts')
+          archives = list(root.rglob('*-static-engine-capi.zip'))
+          if len(archives) != 2: raise RuntimeError('Expected exactly two native SDKs')
+          for archive in archives:
+              receipt = json.loads(archive.with_suffix('.json').read_text())
+              if receipt['integration_commit'] != os.environ['EXPECTED_COMMIT']:
+                  raise RuntimeError('SDK provenance mismatch')
+              if receipt['engine_linkage'] != 'static' or not receipt['sdk_relocation_verified'] or not receipt['application_relocation_verified']:
+                  raise RuntimeError('SDK is not a verified static engine')
+              proof = receipt['smoke']
+              if not all(proof[k] is True for k in ('javascript','paint','browser_modules_clean','renderer_modules_clean')) or proof['browser_pid'] == proof['renderer_pid']:
+                  raise RuntimeError('Missing separate-renderer runtime proof')
+              with archive.open('rb') as stream:
+                  actual = hashlib.file_digest(stream,'sha256').hexdigest()
+              if actual != pathlib.Path(str(archive)+'.sha256').read_text().split()[0]:
+                  raise RuntimeError('SDK archive digest mismatch')
+      - name: Attach tested static SDKs without overwriting existing release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find artifacts -type f \( -name '*.zip' -o -name '*.sha256' -o -name '*.json' \) -print0)
+          test "${#files[@]}" -eq 6
+          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO"

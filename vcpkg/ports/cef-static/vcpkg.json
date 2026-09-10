@@ -1,0 +1,9 @@
+{
+  "name": "cef-static",
+  "version-semver": "152.0.6",
+  "port-version": 0,
+  "description": "Experimental source-built static CEF/Chromium engine with a C API. No shared CEF runtime fallback. Release engine only; native x64 Windows/Linux.",
+  "homepage": "https://github.com/dobord/cef",
+  "license": "BSD-3-Clause",
+  "supports": "x64 & (windows | linux) & !uwp"
+}

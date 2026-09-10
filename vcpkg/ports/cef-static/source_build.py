@@ -45,7 +45,7 @@ def kill_tree(process: subprocess.Popen) -> None:
 
 
 def run(command: list[str | Path], cwd: Path, logs: Path, name: str,
-        timeout: int = 3600) -> str:
+        timeout: int = 3600, quiet: bool = False) -> str:
     args = list(map(str, command))
     logs.mkdir(parents=True, exist_ok=True)
     log_path = logs / (name + '.log')
@@ -60,7 +60,8 @@ def run(command: list[str | Path], cwd: Path, logs: Path, name: str,
             assert process.stdout is not None
             for line in process.stdout:
                 log.write(line); log.flush()
-                print(line, end='', flush=True)
+                if not quiet:
+                    print(line, end='', flush=True)
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
         try:
@@ -112,6 +113,12 @@ def prepare(work: Path, logs: Path) -> Path:
         run(['git', 'checkout', '--detach', 'FETCH_HEAD'], depot, logs, 'depot-checkout')
     if git_hash(depot) != DEPOT:
         raise RuntimeError('depot_tools commit mismatch')
+    # DEPOT_TOOLS_UPDATE=0 intentionally prevents gclient.bat from running its
+    # updater. Bootstrap the pinned Windows wrappers explicitly instead.
+    if WINDOWS:
+        run(['cmd', '/c', 'cipd_bin_setup.bat'], depot, logs, 'depot-cipd')
+        run(['cmd', '/c', r'bootstrap\win_tools.bat'], depot, logs, 'depot-windows-tools')
+        run(['cmd', '/c', 'git.bat', '--version'], depot, logs, 'depot-git-version')
     script = work/'automate-git.py'
     url = f'https://raw.githubusercontent.com/chromiumembedded/cef/{CEF}/tools/automate/automate-git.py'
     with urllib.request.urlopen(url, timeout=120) as response:
@@ -166,7 +173,7 @@ def configuration(source: Path, logs: Path) -> Path:
         'symbol_level': 0, 'blink_symbol_level': 0, 'v8_symbol_level': 0,
         'use_thin_lto': False, 'chrome_pgo_phase': 0,
         'use_static_angle': True, 'enable_swiftshader': False,
-        'enable_vulkan': False, 'use_libcxx_modules': False,
+        'enable_vulkan': False,
         'use_remoteexec': False, 'use_siso': False,
     }
     if not WINDOWS:
@@ -180,7 +187,7 @@ def configuration(source: Path, logs: Path) -> Path:
     shutil.copy2(out/'args.gn', logs/'args.gn')
     gn = find_binary(source, ['buildtools/win/gn.exe'] if WINDOWS else ['buildtools/linux64/gn'])
     run([gn, 'gen', out, '--fail-on-unused-args'], source, logs, 'gn-gen', timeout=1200)
-    graph = run([gn, 'desc', out, '*', '--format=json'], source, logs, 'gn-graph', timeout=300)
+    graph = run([gn, 'desc', out, '*', '--format=json'], source, logs, 'gn-graph', timeout=300, quiet=True)
     (logs/'gn-graph.json').write_text(graph)
     targets = json.loads(graph)
     seen: set[str] = set()
@@ -196,9 +203,9 @@ def configuration(source: Path, logs: Path) -> Path:
         if label.split('(')[0] in ('//cef:libcef', '//cef:libcef_dll_wrapper'):
             raise RuntimeError(f'Forbidden DLL boundary: {label}')
         # Executable generators are build tools, not libraries in our process.
-        if target.get('type') in ('action', 'action_foreach', 'executable') and label != '//cef:cef_static_smoke':
+        if target.get('type') in ('action', 'action_foreach', 'executable', 'rust_proc_macro') and label != '//cef:cef_static_smoke':
             return
-        for dependency in target.get('deps', []):
+        for dependency in target.get('deps', []) + target.get('public_deps', []):
             visit(dependency)
     visit('//cef:cef_static_smoke')
     (logs/'static-link-closure.json').write_text(json.dumps(sorted(seen), indent=2)+'\n')
@@ -218,6 +225,8 @@ def execute_smoke(exe: Path, logs: Path) -> dict:
             shutil.copy2(exe.parent/'debug.log', logs/'debug.log')
     proof = json.loads((exe.parent/'smoke-result.json').read_text())
     required = ['javascript', 'paint', 'browser_modules_clean', 'renderer_modules_clean']
+    if proof.get('cef') != '152.0.6+g708dc14+chromium-152.0.7977.83':
+        raise RuntimeError('Static engine version does not match the source pin')
     if proof.get('engine') != 'static' or not all(proof.get(k) is True for k in required):
         raise RuntimeError('Incomplete static engine runtime proof')
     if proof['browser_pid'] <= 0 or proof['renderer_pid'] <= 0 or proof['browser_pid'] == proof['renderer_pid']:
