@@ -27,7 +27,29 @@ def replace(root: Path, file: str, old: str, new: str) -> None:
     path.write_text(changed, encoding='utf-8', newline='\n')
 
 
+def patch_vulkan_disabled(root: Path) -> None:
+    # Chromium 152 only defines VulkanContextProvider with ENABLE_VULKAN.
+    # Match the guarded device_queue pattern in CreateSharedImageInternal.
+    replace(root, 'gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc',
+            """    gfx::BufferUsage usage) {
+  scoped_refptr<gfx::NativePixmap> pixmap =""",
+            """    gfx::BufferUsage usage) {
+  VulkanDeviceQueue* device_queue = nullptr;
+#if BUILDFLAG(ENABLE_VULKAN)
+  if (vulkan_context_provider) {
+    device_queue = vulkan_context_provider->GetDeviceQueue();
+  }
+#endif  // BUILDFLAG(ENABLE_VULKAN)
+  scoped_refptr<gfx::NativePixmap> pixmap =""")
+    replace(root, 'gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc',
+            """                               vulkan_context_provider
+                                   ? vulkan_context_provider->GetDeviceQueue()
+                                   : nullptr,""",
+            '                               device_queue,')
+
+
 def patch(root: Path) -> None:
+    patch_vulkan_disabled(root)
     replace(root, 'cef/libcef/features/features.gni', '  enable_cef = true\n',
             '  enable_cef = true\n\n  # Build an engine archive, without the DLL-wrapper ABI boundary.\n  cef_static_engine = false\n')
     replace(root, 'cef/include/internal/cef_export.h', '#if defined(COMPILER_MSVC)\n',

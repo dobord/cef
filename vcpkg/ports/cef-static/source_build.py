@@ -145,6 +145,14 @@ def find_binary(source: Path, names: list[str]) -> Path:
     raise FileNotFoundError(f'None of the pinned tool locations exists: {names}')
 
 
+def gn_generate_command(gn: Path, out: Path) -> list[str | Path]:
+    # root-target alone still defines unrelated targets from evaluated
+    # BUILD.gn files. Restrict the graph to the static executable closure.
+    return [gn, 'gen', out, '--fail-on-unused-args',
+            '--root-target=//cef:cef_static_smoke',
+            '--root-pattern=//cef:cef_static_smoke']
+
+
 def configuration(source: Path, logs: Path) -> Path:
     cef = source/'cef'
     out = source/'out/CEF_Static_Release_x64'
@@ -186,7 +194,7 @@ def configuration(source: Path, logs: Path) -> Path:
     (out/'args.gn').write_text(module.GetConfigFileContents(merged)+'\n', newline='\n')
     shutil.copy2(out/'args.gn', logs/'args.gn')
     gn = find_binary(source, ['buildtools/win/gn.exe'] if WINDOWS else ['buildtools/linux64/gn'])
-    run([gn, 'gen', out, '--fail-on-unused-args'], source, logs, 'gn-gen', timeout=1200)
+    run(gn_generate_command(gn, out), source, logs, 'gn-gen', timeout=1200)
     # `gn desc` JSON combines data_deps with link dependencies. Walking that
     # union incorrectly treats build-only ANGLE stubs as runtime imports.
     # Keep metadata for the actual link target, then inspect Ninja's link edge.
@@ -210,7 +218,41 @@ def configuration(source: Path, logs: Path) -> Path:
     return out
 
 
+def regression_targets(inputs: list[str], windows: bool) -> list[str]:
+    names = (('chrome_elf_main.obj', 'initialize_from_primary_module.obj',
+              'crash_reporting.obj', 'smoke.obj') if windows else
+             ('ozone_image_backing_factory.o', 'smoke.o'))
+    result = []
+    for name in names:
+        candidates = [item for item in inputs if item.endswith('/'+name) or
+                      item.endswith('.'+name)]
+        if name.startswith('smoke.'):
+            candidates = [item for item in candidates if 'cef_static_smoke' in item]
+        if len(candidates) != 1:
+            raise RuntimeError(f'Expected one regression object for {name}, found {candidates}')
+        result.append(candidates[0])
+    return result
+
+
+def compile_regressions(source: Path, out: Path, logs: Path, jobs: int) -> None:
+    ninja = find_binary(source, ['third_party/ninja/ninja.exe'] if WINDOWS else
+                        ['third_party/ninja/ninja'])
+    # Archive members are not direct inputs of the final executable.
+    targets = run([ninja, '-C', out, '-t', 'targets', 'all'], source, logs,
+                  'native-targets', timeout=120, quiet=True)
+    inputs = [line.rsplit(': ', 1)[0] for line in targets.splitlines() if ': ' in line]
+    selected = regression_targets(inputs, WINDOWS)
+    (logs/'regression-targets.json').write_text(json.dumps(selected, indent=2)+'\n')
+    run([ninja, '-C', out, '-j', str(jobs), '-d', 'keeprsp', *selected],
+        source, logs, 'regression-compile', timeout=3600)
+    receipt = {'schema': 1, 'compiled_objects': selected,
+               'engine_link_verified': False, 'engine_runtime_verified': False}
+    (logs/'regression-compile-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
+
+
 def execute_smoke(exe: Path, logs: Path) -> dict:
+    # Never accept a proof left by an earlier executable/run.
+    (exe.parent/'smoke-result.json').unlink(missing_ok=True)
     command = [exe]
     if not WINDOWS:
         command = ['xvfb-run', '-a', '-s', '-screen 0 1280x1024x24', exe]
@@ -274,7 +316,7 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('phase', choices=['prepare', 'build'])
+    parser.add_argument('phase', choices=['prepare', 'check', 'build'])
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--logs', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=4)
@@ -285,6 +327,9 @@ def main() -> None:
     work.mkdir(parents=True, exist_ok=True); logs.mkdir(parents=True, exist_ok=True)
     setup_environment(work)
     source = prepare(work, logs)
+    if args.phase == 'check':
+        out = configuration(source, logs)
+        compile_regressions(source, out, logs, args.jobs)
     if args.phase == 'build':
         compile_and_test(source, work, logs, args.jobs)
     print(json.dumps({'phase_completed': args.phase, 'source': str(source)}), flush=True)
