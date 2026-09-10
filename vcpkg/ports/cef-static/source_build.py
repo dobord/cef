@@ -18,6 +18,8 @@ import signal
 import subprocess
 import sys
 import threading
+import time
+import tempfile
 import urllib.request
 
 HERE = Path(__file__).resolve().parent
@@ -47,6 +49,8 @@ def kill_tree(process: subprocess.Popen) -> None:
 def run(command: list[str | Path], cwd: Path, logs: Path, name: str,
         timeout: int = 3600, quiet: bool = False) -> str:
     args = list(map(str, command))
+    if args and args[0] == 'git':
+        args[0] = git_program()
     logs.mkdir(parents=True, exist_ok=True)
     log_path = logs / (name + '.log')
     print(f'[{dt.datetime.now(dt.timezone.utc).isoformat()}] {name}: '
@@ -76,18 +80,97 @@ def run(command: list[str | Path], cwd: Path, logs: Path, name: str,
     return log_path.read_text(encoding='utf-8')
 
 
+def git_program() -> str:
+    """Resolve a native executable, never depot_tools/git.bat with shell=False."""
+    configured = os.environ.get('CEF_STATIC_GIT')
+    candidate = configured or shutil.which('git.exe' if WINDOWS else 'git')
+    if not candidate:
+        raise RuntimeError('Native Git executable is missing. The vcpkg port must acquire GIT explicitly.')
+    path = Path(candidate)
+    if not path.is_absolute() or not path.is_file() or (WINDOWS and path.suffix.lower() != '.exe'):
+        raise RuntimeError('CEF_STATIC_GIT must name an existing absolute native Git executable')
+    return str(path.resolve())
+
+
 def git_hash(path: Path) -> str:
-    return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=path,
+    return subprocess.check_output([git_program(), 'rev-parse', 'HEAD'], cwd=path,
                                    text=True).strip()
 
 
+def python_script(script: Path, *args: str | Path) -> list[str | Path]:
+    # Windows vcpkg uses CPython's isolated embeddable distribution. Its _pth
+    # intentionally excludes the script directory. Add ONLY that directory;
+    # do not edit the interpreter installation or inherit arbitrary PYTHONPATH.
+    return [sys.executable, '-c',
+            'import pathlib,runpy,sys; '
+            'script=str(pathlib.Path(sys.argv[1]).resolve()); '
+            'sys.argv=sys.argv[1:]; sys.argv[0]=script; '
+            'sys.path.insert(0,str(pathlib.Path(script).parent)); '
+            'runpy.run_path(script,run_name="__main__")', script, *args]
+
+
 def setup_environment(work: Path) -> None:
+    git = git_program()
+    os.environ['CEF_STATIC_GIT'] = git
     os.environ['DEPOT_TOOLS_UPDATE'] = '0'
     os.environ['DEPOT_TOOLS_WIN_TOOLCHAIN'] = '0'
     os.environ['PYTHONUNBUFFERED'] = '1'
-    os.environ['PATH'] = str(work/'depot_tools') + os.pathsep + os.environ['PATH']
+    os.environ['PATH'] = os.pathsep.join((str(work/'depot_tools'),
+                                         str(Path(git).parent), os.environ['PATH']))
     # No GN_DEFINES from an unrelated shell may silently change this recipe.
     os.environ.pop('GN_DEFINES', None)
+
+
+def transient_network_failure(text: str) -> bool:
+    """Transport failures only. Never retry source/hash, compiler or link errors."""
+    text = text.lower()
+    return any(pattern in text for pattern in (
+        'connection reset by peer', 'connection timed out',
+        'temporary failure in name resolution', 'remote end hung up unexpectedly',
+        'http error 502', 'http error 503', 'http error 504',
+        'the requested url returned error: 502',
+        'the requested url returned error: 503',
+        'the requested url returned error: 504',
+    ))
+
+
+def run_network(command: list[str | Path], cwd: Path, logs: Path, name: str,
+                *, timeout: int = 7200, attempts: int = 3) -> str:
+    if attempts < 1 or attempts > 3:
+        raise ValueError('Network attempts must be between one and three')
+    for attempt in range(1, attempts + 1):
+        label = f'{name}-{attempt:02d}'
+        try:
+            return run(command, cwd, logs, label, timeout=timeout)
+        except RuntimeError:
+            logfile = logs/(label+'.log')
+            text = logfile.read_text(encoding='utf-8', errors='replace') if logfile.exists() else ''
+            if attempt == attempts or not transient_network_failure(text):
+                raise
+            print(f'{name}: retrying a recorded transient transport failure; attempt {attempt+1}/{attempts}', flush=True)
+            time.sleep(5 * attempt)
+    raise AssertionError('unreachable')
+
+
+def check_tools(work: Path, logs: Path) -> None:
+    """Executed with the actual Python/Git and sanitized vcpkg environment."""
+    version = run([git_program(), '--version'], work, logs, 'native-git', timeout=30).strip()
+    with tempfile.TemporaryDirectory(prefix='cef python toolcheck ', dir=work) as folder:
+        directory = Path(folder)
+        (directory/'sibling.py').write_text('VALUE = 42\n', encoding='utf-8')
+        probe = directory/'probe.py'
+        probe.write_text('import sibling,sys\nassert sibling.VALUE == 42\n'
+                         'assert sys.argv[1] == "argument with spaces"\n'
+                         'print("PYTHON_SIBLING_IMPORT_OK")\n', encoding='utf-8')
+        result = run(python_script(probe, 'argument with spaces'), work, logs,
+                     'python-script-import', timeout=30)
+        if 'PYTHON_SIBLING_IMPORT_OK' not in result:
+            raise RuntimeError('Python script import probe failed')
+    (logs/'toolchain.json').write_text(json.dumps({
+        'git': git_program(), 'git_version': version, 'python': sys.executable,
+        'python_version': sys.version, 'sibling_import_verified': True,
+        'engine_build_verified': False,
+    }, indent=2)+'\n', encoding='utf-8')
 
 
 def prepare(work: Path, logs: Path) -> Path:
@@ -126,12 +209,24 @@ def prepare(work: Path, logs: Path) -> Path:
     if hashlib.sha256(data).hexdigest() != AUTOMATE_SHA256:
         raise RuntimeError('Pinned CEF automation script digest mismatch')
     script.write_bytes(data)
-    run([sys.executable, script, f'--download-dir={work / "download"}',
+    run_network(python_script(script, f'--download-dir={work / "download"}',
          f'--depot-tools-dir={depot}', '--no-depot-tools-update', '--branch=7977',
          f'--checkout={CEF}', '--no-build', '--no-distrib', '--no-chromium-history',
-         '--x64-build'], work, logs, 'source-sync', timeout=7200)
+         '--x64-build'), work, logs, 'source-sync', timeout=7200)
     if git_hash(source) != CHROMIUM or git_hash(source/'cef') != CEF:
         raise RuntimeError('CEF/Chromium commit did not match the lock')
+    # automate-git --no-chromium-history may skip hooks on a resumed checkout.
+    # Always complete the pinned dependency sync and hooks before certifying
+    # preparation; otherwise a recovered transport error could leave tools absent.
+    gclient = (['cmd', '/c', str(depot/'gclient.bat')] if WINDOWS else [depot/'gclient'])
+    run_network([*gclient, 'sync', '--no-history', '--nohooks'], source.parent,
+                logs, 'verify-dependency-sync')
+    run(python_script(source/'cef/tools/patcher.py', '--patch-file',
+                      source/'cef/patch/patches/runhooks', '--patch-dir', source),
+        source/'cef', logs, 'verify-runhooks-patch')
+    run_network([*gclient, 'runhooks'], source.parent, logs, 'verify-runhooks')
+    if git_hash(source) != CHROMIUM or git_hash(source/'cef') != CEF:
+        raise RuntimeError('Source pin changed during dependency verification')
     marker.write_text(json.dumps(expected, indent=2)+'\n')
     (logs/'source-provenance.json').write_text(json.dumps(expected, indent=2)+'\n')
     return source
@@ -181,11 +276,11 @@ def configuration(source: Path, logs: Path) -> Path:
         if json.loads(marker.read_text())['recipe'] != recipe:
             raise RuntimeError('Patched workspace has another recipe; use a fresh workspace')
     else:
-        run([sys.executable, 'tools/version_manager.py', '-u', '--fast-check'],
+        run(python_script(cef/'tools/version_manager.py', '-u', '--fast-check'),
             cef, logs, 'cef-translator')
-        run([sys.executable, 'tools/patcher.py'], cef, logs, 'cef-upstream-patches')
-        run([sys.executable, HERE/'patch_source.py', source,
-             '--receipt', logs/'source-edits.json'], source, logs, 'static-source-patches')
+        run(python_script(cef/'tools/patcher.py'), cef, logs, 'cef-upstream-patches')
+        run(python_script(HERE/'patch_source.py', source,
+             '--receipt', logs/'source-edits.json'), source, logs, 'static-source-patches')
         (cef/'static').mkdir(exist_ok=True)
         shutil.copy2(HERE/'smoke.c', cef/'static/smoke.c')
         marker.write_text(json.dumps({'recipe': recipe})+'\n')
@@ -337,7 +432,7 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('phase', choices=['prepare', 'check', 'build'])
+    parser.add_argument('phase', choices=['tools', 'prepare', 'check', 'build'])
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--logs', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=4)
@@ -347,6 +442,9 @@ def main() -> None:
     work, logs = args.work.resolve(), args.logs.resolve()
     work.mkdir(parents=True, exist_ok=True); logs.mkdir(parents=True, exist_ok=True)
     setup_environment(work)
+    if args.phase == 'tools':
+        check_tools(work, logs)
+        return
     source = prepare(work, logs)
     if args.phase == 'check':
         out = configuration(source, logs)
