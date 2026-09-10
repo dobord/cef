@@ -1,0 +1,60 @@
+name: Source and distribution audit
+on:
+  push:
+    branches: [vcpkg]
+    paths: ['.github/workflows/source-audit.yml', 'vcpkg/cef-source.lock.json']
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REVISION: ${{ github.sha }}
+    steps:
+      - name: Verify source and download checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git clone --branch vcpkg "https://github.com/${GH_REPO}.git" repo
+          cd repo
+          git checkout --detach "$REVISION"
+          mkdir -p ../audit
+          python3 - <<'PY'
+          import concurrent.futures, hashlib, json, pathlib, subprocess, urllib.parse, urllib.request
+          lock = json.loads(pathlib.Path('vcpkg/cef-source.lock.json').read_text())
+          main = subprocess.check_output(['git', 'rev-parse', 'origin/main'], text=True).strip()
+          assert main == lock['cef_commit'], (main, lock['cef_commit'])
+          assert subprocess.check_output(['git', 'rev-parse', main + '^{tree}'], text=True).strip() == lock['cef_tree']
+          subprocess.run(['git', 'archive', '--format=zip', '--output=../audit/upstream-source.zip', main], check=True)
+          def verify(item):
+              platform, distribution = item
+              url = 'https://cef-builds.spotifycdn.com/' + urllib.parse.quote(distribution['name'], safe='')
+              sha1, sha512 = hashlib.sha1(), hashlib.sha512()
+              size = 0
+              with urllib.request.urlopen(url, timeout=120) as response:
+                  while chunk := response.read(1024 * 1024):
+                      size += len(chunk)
+                      sha1.update(chunk)
+                      sha512.update(chunk)
+              assert sha1.hexdigest() == distribution['sha1'], platform + ': SHA1 mismatch'
+              assert size == distribution['size'], platform + ': size mismatch'
+              distribution['sha512'] = sha512.hexdigest()
+              print(platform, distribution['sha512'], flush=True)
+              return platform, distribution
+          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+              lock['distributions'] = dict(pool.map(verify, lock['distributions'].items()))
+          pathlib.Path('../audit/cef-source.lock.json').write_text(json.dumps(lock, indent=2) + '\n')
+          with open('../audit/README.txt', 'w') as out:
+              out.write('Upstream source provenance and official binary hashes only. This audit does NOT build or validate a static CEF engine.\n')
+          PY
+      - name: Upload source review inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cef-source-audit
+          path: audit/
+          if-no-files-found: error
+          retention-days: 7
