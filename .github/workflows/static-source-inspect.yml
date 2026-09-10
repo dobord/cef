@@ -1,0 +1,83 @@
+name: Static engine source and runner inspection
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-source-inspect.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Record actual native runner capacity and pinned source files
+        shell: python
+        run: |
+          import concurrent.futures, json, os, pathlib, platform, shutil, subprocess, urllib.request
+          out = pathlib.Path('inspection'); out.mkdir()
+          roots = [pathlib.Path.cwd().anchor, os.environ['RUNNER_TEMP']]
+          report = {'os': platform.platform(), 'cpus': os.cpu_count(), 'disks': {p: dict(zip(('total','used','free'), shutil.disk_usage(p))) for p in roots}}
+          if os.name == 'nt':
+              report['memory'] = subprocess.check_output(['powershell', '-NoProfile', '-Command', '(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory'], text=True).strip()
+              report['visual_studio'] = subprocess.check_output([r'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe', '-all', '-format', 'json'], text=True)
+          else:
+              report['memory'] = pathlib.Path('/proc/meminfo').read_text()
+              report['large_directories'] = subprocess.run(['du','-sh','/opt/hostedtoolcache','/usr/local/lib/android','/usr/share/dotnet','/usr/local/share/powershell','/opt/ghc','/usr/local/.ghcup'], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+          (out/'runner.json').write_text(json.dumps(report, indent=2))
+          print(json.dumps(report, indent=2))
+          if os.name != 'nt':
+              revision = '79460ebecaa5625e57a5fb679a735659e73dc687'
+              files = '''DEPS
+          .gn
+          build/config/BUILDCONFIG.gn
+          build/config/BUILD.gn
+          build/config/compiler/BUILD.gn
+          build/config/win/BUILD.gn
+          build/config/c++/BUILD.gn
+          build/config/c++/c++.gni
+          ui/gl/features.gni
+          ui/gl/BUILD.gn
+          ui/gl/gl_implementation.cc
+          chrome/chrome_elf/BUILD.gn
+          chrome/chrome_elf/chrome_elf_main.cc
+          chrome/chrome_elf/chrome_elf_main.h
+          chrome/chrome_elf/chrome_elf.def
+          chrome/chrome_elf/crash/crash_helper.cc
+          chrome/chrome_elf/crash/crash_helper.h
+          chrome/install_static/BUILD.gn
+          chrome/install_static/initialize_from_primary_module.cc
+          chrome/install_static/initialize_from_primary_module.h
+          chrome/install_static/product_install_details.cc
+          chrome/install_static/install_details.cc
+          components/crash/core/app/BUILD.gn
+          components/crash/core/app/crash_export_thunks.cc
+          components/crash/core/app/crash_export_thunks.h
+          components/crash/core/app/crashpad_win.cc
+          chrome/BUILD.gn
+          chrome/app/chrome_main_delegate.cc
+          build/toolchain/win/toolchain.gni
+          build/toolchain/gcc_toolchain.gni
+          docs/linux/build_instructions.md
+          docs/windows_build_instructions.md'''.splitlines()
+              def download(path):
+                  url = 'https://raw.githubusercontent.com/chromium/chromium/' + revision + '/' + path
+                  try:
+                      data = urllib.request.urlopen(url, timeout=90).read()
+                      dest = out/'chromium'/path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(data)
+                      return {'path': path, 'size': len(data)}
+                  except Exception as e:
+                      return {'path': path, 'error': str(e)}
+              with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                  result = list(executor.map(download, files))
+              (out/'source-results.json').write_text(json.dumps(result, indent=2))
+              print(json.dumps(result, indent=2))
+              print(subprocess.check_output(['git','ls-remote','https://chromium.googlesource.com/chromium/tools/depot_tools.git','HEAD'], text=True))
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: static-inspect-${{ matrix.os }}
+          path: inspection/
+          retention-days: 7
