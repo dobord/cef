@@ -103,7 +103,7 @@ class NativeTripletTests(unittest.TestCase):
                 'set(VCPKG_LIBRARY_LINKAGE static)',
                 'set(VCPKG_CRT_LINKAGE static)',
                 'set(VCPKG_CROSSCOMPILING TRUE)',
-                f'set(VCPKG_HOST_TRIPLET {host})',
+                f'set(HOST_TRIPLET {host})',
                 f'set(CMAKE_HOST_SYSTEM_NAME {host_os})',
                 f'set(CMAKE_HOST_WIN32 {"TRUE" if host_os == "Windows" else "FALSE"})',
                 f'set(VCPKG_TARGET_IS_WINDOWS {"TRUE" if target == "Windows" else "FALSE"})',

@@ -14,7 +14,9 @@ if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_CRT_LINKAGE STREQUAL "static")
 endif()
 # vcpkg compares complete host/target triplet strings for CROSSCOMPILING;
 # x64-windows -> x64-windows-static only changes linkage, not architecture.
-if(NOT VCPKG_HOST_TRIPLET MATCHES "^x64-")
+# scripts/ports.cmake exposes HOST_TRIPLET to portfiles, not the
+# VCPKG_HOST_TRIPLET variable used by CMake manifest consumers.
+if(NOT HOST_TRIPLET MATCHES "^x64-")
     message(FATAL_ERROR "cef-static requires an x64 host")
 endif()
 if(VCPKG_TARGET_IS_WINDOWS AND NOT CMAKE_HOST_WIN32)
