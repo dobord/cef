@@ -1,0 +1,101 @@
+name: Static recipe preflight (NOT engine validation)
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-preflight.yml']
+permissions:
+  contents: read
+jobs:
+  preflight:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Generate pinned public C headers and compile fixture without linking
+        shell: python
+        run: |
+          import json, os, pathlib, shutil, subprocess, sys, urllib.request
+          root = pathlib.Path.cwd()
+          work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'static-preflight'
+          work.mkdir()
+          cef = work / 'cef'
+          def run(args, cwd=work):
+              print(subprocess.list2cmdline(list(map(str,args))), flush=True)
+              subprocess.run(list(map(str,args)), cwd=cwd, check=True)
+          run(['git','init',cef])
+          run(['git','fetch','--depth=1','https://github.com/chromiumembedded/cef.git','708dc140cbc3286826a8abef89dc23a44ff9ea72'],cef)
+          run(['git','checkout','--detach','FETCH_HEAD'],cef)
+          sys.path.insert(0,str(cef/'tools'))
+          from cef_parser import obj_header
+          from make_capi_header import make_capi_header
+          h = obj_header(); h.set_root_directory(str(cef/'include'))
+          h.add_directory(str(cef/'include'), ['cef_api_hash.h','cef_application_mac.h','cef_version_info.h'])
+          h.add_directory(str(cef/'include/test')); h.add_directory(str(cef/'include/views'))
+          for name in sorted(h.get_file_names()):
+              p = cef/'include/capi'/name.replace('.h','_capi.h')
+              p.parent.mkdir(parents=True, exist_ok=True); p.write_text(make_capi_header(h,name),encoding='utf-8')
+          run([sys.executable,cef/'tools/make_api_versions_header.py',cef/'include/cef_api_versions.h',work/'cef_api_versions.inc',cef/'cef_api_versions.json',cef/'cef_api_untracked.json'])
+          (work/'args.gn').write_text('target_cpu="x64"\n')
+          run([sys.executable,cef/'tools/make_config_header.py',cef/'include/cef_config.h',work/'args.gn'])
+          # Compile-only fixture constant. Real builds use the original GN version generator.
+          (cef/'include/cef_version.h').write_text('#define CEF_VERSION "compile-only-preflight"\n')
+          url = 'https://raw.githubusercontent.com/chromium/chromium/79460ebecaa5625e57a5fb679a735659e73dc687/net/base/net_error_list.h'
+          with urllib.request.urlopen(url,timeout=120) as r:
+              errors = r.read()
+          (cef/'include/base/internal/cef_net_error_list.h').write_bytes(errors)
+          src = root/'vcpkg/ports/cef-static/smoke.c'
+          project = work/'project'; project.mkdir()
+          (project/'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.24)\nproject(static_capi_syntax LANGUAGES C)\nadd_library(syntax OBJECT "'+src.as_posix()+'")\ntarget_include_directories(syntax PRIVATE "'+cef.as_posix()+'")\ntarget_compile_definitions(syntax PRIVATE CEF_STATIC CEF_API_VERSION=15200)\nset_target_properties(syntax PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)\nif(MSVC)\n target_compile_options(syntax PRIVATE /W4 /WX)\nelse()\n target_compile_options(syntax PRIVATE -Wall -Wextra -Werror)\nendif()\n')
+          configure = ['cmake','-S',project,'-B',work/'build']
+          if os.name == 'nt': configure += ['-G','Visual Studio 17 2022','-A','x64']
+          else: configure += ['-G','Unix Makefiles']
+          evidence = root/'preflight'; evidence.mkdir(exist_ok=True)
+          (evidence/'net_error_list.h').write_bytes(errors)
+          shutil.make_archive(str(evidence/'generated-public-headers'),'zip',cef,'include')
+          run(configure)
+          run(['cmake','--build',work/'build','--config','Release'])
+          (evidence/'syntax.json').write_text(json.dumps({'compile_only':True,'engine_linked':False,'engine_run':False,'headers':len(h.get_file_names())},indent=2))
+      - name: Bootstrap Windows wrappers at the locked depot_tools commit
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DEPOT_TOOLS_UPDATE: '0'
+          DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
+        run: |
+          $depot = Join-Path $env:RUNNER_TEMP 'depot-preflight'
+          git init $depot
+          git -C $depot fetch --depth=1 https://chromium.googlesource.com/chromium/tools/depot_tools.git 08f3e8c0eb66d6de3a048a757d0ff708dbc8ea34
+          git -C $depot checkout --detach FETCH_HEAD
+          $env:PATH = "$depot;$env:PATH"
+          Push-Location $depot
+          try {
+            Get-Content git_cache.py | Select-String -Pattern 'git_exe ='
+            & .\cipd_bin_setup.bat
+            if ($LASTEXITCODE) { throw 'CIPD bootstrap failed' }
+            & .\bootstrap\win_tools.bat
+            if ($LASTEXITCODE) { throw 'Windows tool wrapper generation failed' }
+            & .\git.bat --version
+            if ($LASTEXITCODE) { throw 'git.bat unavailable after bootstrap' }
+            git config --global cache.cachepath (Join-Path $env:RUNNER_TEMP 'git-cache-preflight')
+            & .\vpython3.bat -c "import git_cache; print(git_cache.Mirror.GetCachePath())"
+            if ($LASTEXITCODE) { throw 'gclient Git cache resolution failed' }
+          } finally {
+            Pop-Location
+            New-Item -Type Directory preflight -Force | Out-Null
+            Copy-Item "$depot\bootstrap\win_tools.bat" preflight
+            Copy-Item "$depot\git_cache.py" preflight
+            Copy-Item "$depot\gclient.bat" preflight
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: static-preflight-${{ matrix.os }}
+          path: preflight/
+          if-no-files-found: warn
+          retention-days: 7
