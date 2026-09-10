@@ -12,8 +12,16 @@ endif()
 if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_CRT_LINKAGE STREQUAL "static")
     message(FATAL_ERROR "The Windows engine requires the static release CRT (/MT)")
 endif()
-if(VCPKG_CROSSCOMPILING)
-    message(FATAL_ERROR "cef-static requires native execution for its engine proof")
+# vcpkg compares complete host/target triplet strings for CROSSCOMPILING;
+# x64-windows -> x64-windows-static only changes linkage, not architecture.
+if(NOT VCPKG_HOST_TRIPLET MATCHES "^x64-")
+    message(FATAL_ERROR "cef-static requires an x64 host")
+endif()
+if(VCPKG_TARGET_IS_WINDOWS AND NOT CMAKE_HOST_WIN32)
+    message(FATAL_ERROR "Windows cef-static must build and execute on Windows")
+endif()
+if(VCPKG_TARGET_IS_LINUX AND NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "Linux cef-static must build and execute on Linux")
 endif()
 # The source recipe currently builds one Release engine configuration. Do not
 # pretend a release /MT engine is a separately compiled /MTd engine.

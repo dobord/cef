@@ -57,10 +57,10 @@ def query_link_inputs(query: str) -> list[str]:
         value = value.removeprefix('| ').strip()
         if FORBIDDEN.search(value):
             raise RuntimeError(f'Shared engine in native link edge: {value}')
+        if re.search(r'\.so(?:\.|$)|\.dll(?:\.|$)|\.dylib$', value, re.I):
+            raise RuntimeError(f'Shared library in native link edge: {value}')
         if Path(value).suffix.lower() in BINARY_SUFFIXES:
             result.append(value)
-        elif re.search(r'\.so(?:\.|$)|\.dll(?:\.|$)|\.dylib$', value, re.I):
-            raise RuntimeError(f'Shared library in native link edge: {value}')
     if not result:
         raise RuntimeError('No object/archive inputs found in native Ninja link edge')
     return list(dict.fromkeys(result))

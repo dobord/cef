@@ -187,28 +187,26 @@ def configuration(source: Path, logs: Path) -> Path:
     shutil.copy2(out/'args.gn', logs/'args.gn')
     gn = find_binary(source, ['buildtools/win/gn.exe'] if WINDOWS else ['buildtools/linux64/gn'])
     run([gn, 'gen', out, '--fail-on-unused-args'], source, logs, 'gn-gen', timeout=1200)
-    graph = run([gn, 'desc', out, '*', '--format=json'], source, logs, 'gn-graph', timeout=300, quiet=True)
+    # `gn desc` JSON combines data_deps with link dependencies. Walking that
+    # union incorrectly treats build-only ANGLE stubs as runtime imports.
+    # Keep metadata for the actual link target, then inspect Ninja's link edge.
+    graph = run([gn, 'desc', out, '//cef:cef_static_smoke', '--format=json'],
+                source, logs, 'gn-graph', timeout=300, quiet=True)
     (logs/'gn-graph.json').write_text(graph)
-    targets = json.loads(graph)
-    seen: set[str] = set()
-    def visit(label: str) -> None:
-        if label in seen:
-            return
-        seen.add(label)
-        target = targets.get(label)
-        if target is None:
-            raise RuntimeError(f'Missing target in GN graph: {label}')
-        if target.get('type') in ('shared_library', 'loadable_module'):
-            raise RuntimeError(f'Shared library in static link closure: {label}')
-        if label.split('(')[0] in ('//cef:libcef', '//cef:libcef_dll_wrapper'):
-            raise RuntimeError(f'Forbidden DLL boundary: {label}')
-        # Executable generators are build tools, not libraries in our process.
-        if target.get('type') in ('action', 'action_foreach', 'executable', 'rust_proc_macro') and label != '//cef:cef_static_smoke':
-            return
-        for dependency in target.get('deps', []) + target.get('public_deps', []):
-            visit(dependency)
-    visit('//cef:cef_static_smoke')
-    (logs/'static-link-closure.json').write_text(json.dumps(sorted(seen), indent=2)+'\n')
+    ninja = find_binary(source, ['third_party/ninja/ninja.exe'] if WINDOWS else
+                        ['third_party/ninja/ninja'])
+    executable = 'cef_static_smoke.exe' if WINDOWS else 'cef_static_smoke'
+    query = run([ninja, '-C', out, '-t', 'query', executable],
+                source, logs, 'native-link-edge', timeout=120, quiet=True)
+    # The exporter uses this exact parser too: direct and implicit linker
+    # inputs count; order-only generators/data do not. Imported .so/.dll/.TOC
+    # dependencies are rejected. Runtime module checks still run after linking.
+    export_spec = importlib.util.spec_from_file_location('cef_static_export', HERE/'export_static.py')
+    assert export_spec and export_spec.loader
+    exporter = importlib.util.module_from_spec(export_spec)
+    export_spec.loader.exec_module(exporter)
+    inputs = exporter.query_link_inputs(query)
+    (logs/'static-link-inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
     return out
 
 
