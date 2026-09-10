@@ -68,8 +68,18 @@ jobs:
       - name: Install official Chromium Linux build prerequisites
         if: runner.os == 'Linux'
         run: sudo "${{ runner.temp }}/cef-static/download/chromium/src/build/install-build-deps.sh" --no-prompt --no-arm --no-chromeos-fonts
-      - name: Generate static-only graph and compile platform regression objects
-        run: python vcpkg/ports/cef-static/source_build.py check --work "${{ runner.temp }}/cef-static" --logs static-diagnostics/configure --jobs 4
+      - name: Configure and validate the static-only graph (no premature one-hour compile)
+        shell: python
+        run: |
+          import os, pathlib, sys
+          sys.path.insert(0, str(pathlib.Path('vcpkg/ports/cef-static').resolve()))
+          import source_build as build
+          work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'cef-static'
+          logs = pathlib.Path('static-diagnostics/configure').resolve()
+          logs.mkdir(parents=True, exist_ok=True)
+          build.setup_environment(work)
+          source = build.prepare(work, logs)
+          build.configuration(source, logs)
       - name: Preserve configuration evidence before the engine build
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -78,7 +88,10 @@ jobs:
           path: static-diagnostics/configure/
           if-no-files-found: warn
           retention-days: 7
-      - name: Build through vcpkg and verify an external relocated SDK consumer
+      # The native reference executable depends on all regression objects.
+      # Building them separately traversed almost the entire engine graph and
+      # timed out after one hour before this stage was reached (run 34505690797).
+      - name: Build the complete engine through vcpkg and verify an external relocated SDK consumer
         run: python vcpkg/static/ci.py --triplet ${{ matrix.triplet }}
       - name: Compiler cache statistics
         if: always() && runner.os == 'Linux'

@@ -21,7 +21,14 @@ CEF_COMMIT = '708dc140cbc3286826a8abef89dc23a44ff9ea72'
 CHROMIUM_COMMIT = '79460ebecaa5625e57a5fb679a735659e73dc687'
 CEF_VERSION = '152.0.6+g708dc14+chromium-152.0.7977.83'
 BINARY_SUFFIXES = {'.o', '.obj', '.a', '.lib', '.rlib', '.res'}
-FORBIDDEN = re.compile(r'(libcef\.(dll|so)|chrome_elf\.dll|lib(?:egl|glesv2|vk_swiftshader)\.(dll|so))', re.I)
+FORBIDDEN = re.compile(r'(libcef\.(dll|so)|chrome_elf\.dll|lib(?:egl|glesv2|vk_swiftshader)\.(dll|so)|dxcompiler(?:\.dll)?\.lib|dxcompiler\.dll|dxil\.dll)', re.I)
+# Rust can pass OS import libraries via ldflags rather than GN's libs array.
+# Accept only names observed in the pinned Windows graph, not arbitrary paths.
+WINDOWS_FLAG_LIBRARIES = frozenset({
+    'advapi32.lib', 'bcrypt.lib', 'kernel32.lib', 'ntdll.lib',
+    'synchronization.lib', 'userenv.lib', 'ws2_32.lib',
+    'legacy_stdio_definitions.lib',
+})
 
 
 def sha256(path: Path) -> str:
@@ -92,10 +99,13 @@ def link_options(flags: list[str], windows: bool,
         lower = flag.lower()
         reason = None
         if windows:
+            if lower in WINDOWS_FLAG_LIBRARIES:
+                kept.append(flag)
+                continue
             if lower.startswith(('/stack:', '/include:', '/defaultlib:', '/nodefaultlib:',
                                  '/delayload:', '/guard:', '/alternatename:', '/export:')) or lower in (
                     '/dynamicbase', '/nxcompat', '/highentropyva', '/largeaddressaware',
-                    '/cetcompat', '/opt:ref', '/opt:icf', '/incremental:no', '/wx'):
+                    '/cetcompat', '/opt:ref', '/opt:icf', '/incremental:no', '/wx', '/fixed:no'):
                 kept.append(flag)
                 continue
             if lower.startswith(('/machine:', '/subsystem:', '/entry:')):
@@ -109,7 +119,7 @@ def link_options(flags: list[str], windows: bool,
                                    '/lld', '/prefetch-', '/mllvm', '/call-graph-profile-sort',
                                    '/ignore:')):
                 reason = 'build-host diagnostics, layout or compiler-specific optimization'
-            elif lower in ('/nologo', '/brepro', '/fastfail'):
+            elif lower in ('/nologo', '/brepro', '/fastfail', '--color-diagnostics'):
                 reason = 'build-host linker control'
         else:
             if flag in ('-m64', '-pthread', '-pie', '-rdynamic', '-Werror',

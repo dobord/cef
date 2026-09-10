@@ -1,0 +1,5 @@
+{
+  "source_run": 34505690797,
+  "target": "//cef:cef_static_smoke",
+  "ldflags": ["-Werror", "-fPIC", "--target=x86_64-unknown-linux-gnu", "-no-canonical-prefixes", "-Wl,--gc-sections", "-Wl,-z,defs", "-Wl,--as-needed", "-nostdlib++", "--sysroot=../../build/linux/debian_bullseye_amd64-sysroot", "--ld-path=../../buildtools/third_party/mold/cipd/mold", "-Wl,--fatal-warnings", "-Wl,--build-id", "-Wl,-z,noexecstack", "-Wl,-z,relro", "-Wl,-z,now", "-Wl,--icf=all", "-Wl,--undefined-version", "-rdynamic", "-pie", "-Wl,--disable-new-dtags", "-Wl,-rpath=$ORIGIN"]
+}
