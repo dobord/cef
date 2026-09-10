@@ -153,6 +153,24 @@ def gn_generate_command(gn: Path, out: Path) -> list[str | Path]:
             '--root-pattern=//cef:cef_static_smoke']
 
 
+def static_profile(merged: dict, windows: bool) -> dict:
+    """Apply only reviewed differences from the upstream distribution profile.
+
+    Do not silently discard arbitrary unused GN arguments. The Linux installer
+    argument belongs to a target deliberately excluded by our static root.
+    On Windows, Dawn's built DXC target is a DLL, not a static compiler archive.
+    Use its supported no-DXC/OS-FXC path, and never search local component DLLs.
+    """
+    result = dict(merged)
+    if windows:
+        result.update(dawn_use_built_dxc=False,
+                      dawn_force_system_component_load=True,
+                      dawn_use_agility_sdk=False)
+    else:
+        result.pop('enable_linux_installer', None)
+    return result
+
+
 def configuration(source: Path, logs: Path) -> Path:
     cef = source/'cef'
     out = source/'out/CEF_Static_Release_x64'
@@ -189,7 +207,7 @@ def configuration(source: Path, logs: Path) -> Path:
                     ozone_platform_x11=True, ozone_platform_wayland=False)
     if shutil.which('ccache'):
         args['cc_wrapper'] = 'ccache'
-    merged = module.GetConfigArgs(module.GetMergedArgs(args), False, 'x64')
+    merged = static_profile(module.GetConfigArgs(module.GetMergedArgs(args), False, 'x64'), WINDOWS)
     out.mkdir(parents=True, exist_ok=True)
     (out/'args.gn').write_text(module.GetConfigFileContents(merged)+'\n', newline='\n')
     shutil.copy2(out/'args.gn', logs/'args.gn')
@@ -299,7 +317,8 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
         imports = run(['readelf', '-d', deploy/exe.name], source, logs, 'binary-imports')
         run(['ldd', deploy/exe.name], source, logs, 'runtime-libraries')
     forbidden = ('libcef.dll', 'libcef.so', 'chrome_elf.dll', 'libegl.dll',
-                 'libglesv2.dll', 'libegl.so', 'libglesv2.so', 'libvk_swiftshader')
+                 'libglesv2.dll', 'libegl.so', 'libglesv2.so', 'libvk_swiftshader',
+                 'dxcompiler.dll', 'dxil.dll')
     if any(name in imports.lower() for name in forbidden):
         raise RuntimeError('Executable imports a forbidden shared engine dependency')
     proof = execute_smoke(deploy/exe.name, logs)
@@ -308,6 +327,8 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
                'configuration': 'Release', 'engine_linkage': 'static',
                'source_build_verified': True, 'sandbox_verified': False,
                'system_libraries_static': False, 'capi_only': True, 'smoke': proof,
+               'dxc_enabled': False, 'vulkan_enabled': False,
+               'swiftshader_enabled': False, 'system_fxc': WINDOWS,
                'integration_commit': os.environ.get('GITHUB_SHA'),
                'executable_sha256': digest(deploy/exe.name)}
     (logs/'engine-build-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')

@@ -97,7 +97,7 @@ static int engine_modules_are_static(void) {
 #if defined(_WIN32)
   static const wchar_t* forbidden[] = {
     L"libcef.dll", L"chrome_elf.dll", L"libEGL.dll", L"libGLESv2.dll",
-    L"libvk_swiftshader.dll", L"vk_swiftshader.dll", L"ffmpeg.dll"
+    L"libvk_swiftshader.dll", L"vk_swiftshader.dll", L"ffmpeg.dll", L"dxcompiler.dll", L"dxil.dll"
   };
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
   if (snapshot == INVALID_HANDLE_VALUE) return 0;
