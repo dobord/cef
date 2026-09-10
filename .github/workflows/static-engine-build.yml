@@ -41,7 +41,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 350
     env:
-      CCACHE_DIR: ${{ runner.temp }}/cef-ccache
+      CCACHE_DIR: ${{ github.workspace }}/.cef-ccache
       CCACHE_MAXSIZE: 4G
       CCACHE_COMPILERCHECK: content
     steps:
