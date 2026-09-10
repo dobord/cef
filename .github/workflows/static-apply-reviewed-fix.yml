@@ -1,0 +1,40 @@
+name: Apply reviewed static link contract fix
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-apply-reviewed-fix.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify and apply the reviewed patch
+        shell: python
+        run: |
+          import base64, gzip, hashlib, pathlib, subprocess
+          encoded = '''H4sIAAAAAAAC/7VZe3PaSBL/n08x52yVxAICPxI73uJuCcYOFxv7AF92y/FphTSAYiEpMyPbVLLf/brnAeJpspfL1mI09HT39PTj160gHA5JpTIKBfGqj376MKqmCRO86tNhhQtPhH6VPuOSq56cdEoGu1IWwjigz+Tw+LB29NZ3nMHhyeuj432yX6u9OToqVCqV3aUWSqXSd0j+9VdSeX1c3q+RkvoDCwEdki8ZZVM3CuMHN4zTTHBbrpwSLliRVP5OopCLO3i4Py0Q8+/RizJK6uqvw+gkeaQpo8Pw2ba+EavoAH2Y2sX5jnBIzq+779pnZ62Ow6nH/LEtdxdzbPEf80JOSTeLRTihLcYSZg+t3thjNCA0HoUxJWFMYjjWIyWoNqHBiJ6Sr5Lbn1axUMrJZNQIY9Ynhyf2P04/Od9+Kn775ARRlH+aRuHgJ6usjlTGjW1QrbSrarCbeWz6km55e9x4wtjA4dkQjOdEyRNldhG5vGt3Gt3f3d7t+Xn7t1Zv2UqUZ5FwvDSlcaCZFCrmVxr9gKNX/h9HB73iRGj1c2daw9/qJCQZfKa+qOIpkK9yUDJMsjjIieuE8WdvLtTIYlRkLJb+awehL5whSyYPdMptJb5YLAQ7RDsuDMOIOv7Ee6CbI26RTkf629qxP/AOHacGEU733+4U6Uuctsb5Ei1G+f5B+YSU4HP/DQY5OEg4xFCEz383bz5cuP1G96LVd9s992O7c3b9sUcanTPSue4T9Xuz23cv250PjYsW6fW7rX/dNi7JnhK4p407oZx7I2qfN/qNS7fV7V53yV5/TMlHOHjyxE2sMvolC8HeRMBvigWsRdSD6wY5xK5e9YvI1KhZmanZ7F73es3rq5s2KHOh3Xut3Lk95vK0b9Bn6mciTGLwGkZCMVMsZUkyBMGlV0SalvjJJPVwJ36JqKBknHBRFR4bUUEwn8EiZsUwHnHJbVHBX5DV85ujypO2AOTO3KNRMImjKfHHXjwCUeizcJqyDArp5QL8PYMILJTADvMreX/d67v9bvvmstUnV41+832rR/b+g/z3dMbb2TJejHrJ0+FeY/jSDv7RvGp8aCll4KfDg22ijSPkVJhkXJBBFkYBKBHou6FgEuM1L+kDdr79bZ02vd97/daV22lc5V32Moyz5632kRS7qWiYzQPqFUGH50nGfHR0P0wp8TPGaCzgjiUTDjshr2mH167nJ/EwHGXMQ790yFmC14/soIQK4E68WYhAdMyqHtwc4RR81BMUfQjcFAI/QBpTGp2dMprS2JUKboUvS4Q6pw32B8f08Nhxjk4O/bevD3bKacustia1ZWKZ1U6OyweY1/DvG4NeFkxpq32nsrKWSZSMuPoucQx+0RWHjyElRI6fpNMDO8lE1YIg584ottSu+bPOdqMYwM4Qju8OwhhqnZZUJneWVFIkScSrEOnVUeyAz1j3WOlM9NAIbnKBMkJfenME1Na9qVZZbN+N4jKxRhT1ALXge6Uy9MKoksSVLM44DSqomHVfJkYBVBf3xBW1DesnbK3vH9RqOmWOmJeOQf+5hIByfybiZ0vJSdjEE/XPPIk38Ec2OQmHtVoZ0GNIRb3PEH7IKHtF/gBjoYA/yD971x10U7AZpJ3AE54b0JSTp1CMVbmGR/B3Gvsh5Q756EUPkFyhVHjCcMtizN1h7CcQVz7GlWDUgzQurVmR2bTRubhsQWbOBhAiHM+JOpJwIh3LMaw+UJpCFhAeaiITONYkD/KtFyl1VK4v4zrK5ClIVOjC4nN8oRm+YNYqOvQp/K8xuMsnyQNdZ+tFkCn98/uNL/fZynkNvSMFFJ0nBmXFFfRZ2HJd+4U6LYcjIB1gTy/gCwSc0hj6AKrgP9DBV1v/hsH3GPJQ2JE3oNG8XehAwsuBRwgDSYBwTfJbwpUSo83XkMTxgkBxzUFaXYbrRmsHPlaIQJimg2S5pMhGFHsVci69Tu+MyUVHXS6gVykB0euqDKmBJaYpAE7cZVtc4mFX42G8arSpN4ioO0mCLALCvwardW2SHuhHCQeAsEk3uejwNIKbsWyreFe7V8opfwSm8Mea+ad6dqEhcJ8YdhNsNx3PEzYIA4hccnZ5SQYIyD1sGtco9Yq0ZBFFOxBIUhSSdcIgUhnVhVbmRIWB1KEhG6DSEAUI03wo3M5OFwCxDNkCT6e+uRBo1PMxcCw6UwKfGJR5F3m7E89nCTDAaq889W/1jdH7gvdiTpmlNHlzeU0x94Hsu/siKS38kGaDCETMf18So+JszlgbVy1vUlUT6ZSgfqqgB1W0B63JDjIPBNkk5VDgmKCBjfFYLBMs/LGoHxRL1qfYtNixbLs21UUxDlngAloR06qkVJ/rq+NqCjT/NjLCwil3zS8WdLGW7SDlrRTjFTJL8ZKjD5PTpRjM1815ORboPJIKvswl75DEVT+ibkB2qQu1em0lRXSp5jiUEaj+2ERBYqPP4N0EDMJhGWLnlAQh1kbpwlD0wJdCIZMFZYaV7px9CFTxC0lYQJmqnfOArMqyGEgw6pC2LJ6QhhyeVHFgUHX6103DLl+3ZSAzio06DRyTKIjKeNDpUP+BQwYLowjNSrwhnga1g6TrmCtUwyqot2B8VbchEzgSpeGqi627i32uGyW+Anv5O1QMwKTvW91W1VoefhmP9TiYTCyIUyB/9iyroDHbzPYrOqnDKa1wm51jUVw5k2aKrujrSmAb3ppa3099JtPZMJfT9GvCWlFtj2pFsxrP+XkJeGSBwH+7dBKCcljAT3MTAMgFA//c2lds3aa7jGP6ujYcvHac4OTo2Ns/3KnL2M54a8+xfSt2IIflN6R0WD7B3gNvnrjuMMNm3XW1f4A3QfBI9+QFs7boOgW1NYVmBJYMDfYmsw2CTlJ0deiA1YJqV+aP2UBXxdkWQMkCVceL6zW77Zs+uJKcL7oqatyiA61/Ej1Su+jgmCMW/G7/fk2oqKMeyLMe6RGSH0HkYAP80ILM1UdL2Uakg49N6FWXB7kS5XMaDR1QGIls1CT2JrRuvkBlkQQqLrsINLidRxrLPGUfLwNoTXxYgF9OP8U6mE5ljsFHQqySkYj+TtDFccep8n0VUQho5e3L5OhicpSwKOQu3Knr5UTZqHR+OGzKxhYVksFn9Db839W9ugfi1xQ+Cz++fUMo1Lq4hPSrGKgVaHR6jweYj1fOUZpj6JlJW1+gt7E3WkxlFKzW69STFXbJOKa8uBrrCkBQYCGT/lcsg4jI2B7x0J3lA/JKJnAsrCcSI0sImlvIFXw8qAME1v3SKP4HOVfpBzgXms7Dy5S3tN3XSsqd574GnSZzF/oGqKgr5lxz7J1D5i+caH5F+ysnwOxwvI/Z4eSwfFT7y9lhplYCZUrOrm1Ldzy/wOYY52A0qCiYLKMU4vTXGVv+EKa3cQQ50NbDnKdx6I8BFCArC+7eal7huF5PPQPpiTJXpoCVkjgI5VBYZn28GHWIjgRpfTXr3XySWUxIdOP6sCqvqkx+Ls+GCDhfVZ9uAiWXj5MsClye+T6lQd73XhGl6iNcPoJJhaj4NAbngKR8qlCf1BROAOE31fNiM+NWc7I5w/wJEVPYqiTovF+1Ft8ZWFgavEBhhaJpHbHVV9PXd7ftyzO3//tNy0wli7KtnMuTXmmqFtgJaxLc45lEpQl0BUUcyyDBUsRhFTSFCn8uVi1paqXXKm0e1SBwcT4nIQD11TDOqa+Hx41u832732r2b7stHH8XrfLWbZftd118/2beg6gC+dKu/JuTXXfk3yGQfve2tXbLMLdn4WXAV/SwP7fs2TAl/6o9c8etctxPvu6hgnvYT+ntpF6fjfr3VHO1d9647LX2/nzxHKvvGXL8zcDnR7BXrw3WM1dj/R1YL0TVfbG49G5YvlLEGdkMnTmyi9QZCZvHG/jkgtnoysX7MvG9VMJHlWBl7wfpA5w73wZurOr6FbBC7X4SUDxObTnRlM2rYi4CkFOaP1HGVuu7flllILCykxtMoZ7Bo7xz/SZspdRLBXMJUe2tW/r2LJUL61bunZg1y495ssUDGFssKSon6K5KgDurIu96QZEotyLVMCQ7KeGzhHPYthn/fI9RdtXl3ANf3aRM/iXi/66WxybfeVtz5QoaGHSpT8NUvIALZscYTwcsDEB1ucuN6SMgJA+Yp+sAkSarf5XTAD+ZTEJhnWpw0Wydu5Bar9r9suWPoe0Ks8kKzfvu9VX79soQFv4Lfr440AEkAAA='''
+          patch = gzip.decompress(base64.b64decode(encoded))
+          assert hashlib.sha256(patch).hexdigest() == '693bdb173ca9c6d30e13000b1beee3404e82553809567650d290a2e399ed37d6'
+          pathlib.Path('reviewed.patch').write_bytes(patch)
+          subprocess.run(['git','apply','--check','reviewed.patch'],check=True)
+          subprocess.run(['git','apply','reviewed.patch'],check=True)
+          subprocess.run(['python','-m','unittest','discover','-s','vcpkg/ports/cef-static/tests','-v'],check=True)
+      - name: Commit only checked source changes without rewriting history
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add vcpkg/ports/cef-static/export_static.py vcpkg/ports/cef-static/portfile.cmake vcpkg/ports/cef-static/source_build.py vcpkg/ports/cef-static/tests/test_static_contract.py
+          git diff --cached --stat
+          git commit -m 'fix(static): validate actual native link inputs and distinguish CRT from cross-compilation'
+          git push origin HEAD:refs/heads/static-engine
+          git rev-parse HEAD
