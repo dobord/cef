@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "resolved_at": "2026-09-10T03:08:07.165790+00:00",
+  "index_url": "https://cef-builds.spotifycdn.com/index.json",
+  "selection": "latest stable available for both windows64 and linux64",
+  "cef_version": "152.0.6+g708dc14+chromium-152.0.7977.83",
+  "cef_commit": "708dc140cbc3286826a8abef89dc23a44ff9ea72",
+  "cef_tree": "a06632c3a6fe13c349459a8e277d1c4573a4707b",
+  "chromium_version": "152.0.7977.83",
+  "vcpkg_commit": "3723ec118c8354290925feb58d021a9205a3e772",
+  "distributions": {
+    "windows64": {
+      "last_modified": "2026-09-07T08:19:10.118000Z",
+      "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_windows64_minimal.tar.bz2",
+      "sha1": "e5e3020627f4528bd43e22f4c4970000b0458e99",
+      "size": 171619649,
+      "type": "minimal"
+    },
+    "linux64": {
+      "last_modified": "2026-09-07T03:58:58.670000Z",
+      "name": "cef_binary_152.0.6+g708dc14+chromium-152.0.7977.83_linux64_minimal.tar.bz2",
+      "sha1": "9711b86c105fb590da576fe5a829802f1a79d520",
+      "size": 321503907,
+      "type": "minimal"
+    }
+  }
+}
