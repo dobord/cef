@@ -16,15 +16,18 @@ jobs:
       - name: Archive tracked recipe and pinned dependency review inputs
         shell: python
         run: |
-          import ast, hashlib, json, pathlib, re, subprocess, urllib.request
+          import ast, base64, hashlib, json, pathlib, re, subprocess, urllib.request
           out = pathlib.Path('review-inputs'); out.mkdir()
           subprocess.run(['git', 'archive', '--format=zip', '-o', str(out/'cef-source.zip'), 'HEAD'], check=True)
           revision = '79460ebecaa5625e57a5fb679a735659e73dc687'
           receipt = []
           def download(repo, revision, path, directory):
               url = f'https://raw.githubusercontent.com/{repo}/{revision}/{path}'
+              if repo == 'google/dawn':
+                  url = f'https://dawn.googlesource.com/dawn/+/{revision}/{path}?format=TEXT'
               try:
                   with urllib.request.urlopen(url, timeout=60) as response: data = response.read()
+                  if repo == 'google/dawn': data = base64.b64decode(data,validate=True)
               except Exception as error:
                   receipt.append({'url':url, 'error':str(error)}); return None
               target = out/directory/path; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(data)
