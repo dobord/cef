@@ -1,0 +1,62 @@
+name: C API fixture compile contract (NOT engine build)
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-capi-fixture.yml']
+permissions:
+  contents: read
+jobs:
+  compile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux64
+            sha512: d37812c474c5368baac566646d30618026fda809f759c302ab72c5e462e7298b63ed64ab431057f2bb5e6dd284c3e2bc05a3a5c2318d0e82804a5019061c6fc2
+          - os: windows-2022
+            platform: windows64
+            sha512: a3f74a522c2a9ed855bd291435e239012f1647992ee2054f157eda6f02c98fc764128370a4e8198fb9e1db2a9762cdc66eda6b2ec4d02d12cf1b565507b2ae18
+    runs-on: ${{ matrix.os }}
+    env:
+      CEF_PLATFORM: ${{ matrix.platform }}
+      EXPECTED_SHA512: ${{ matrix.sha512 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Obtain only matching public headers for a syntax check
+        shell: python
+        run: |
+          import hashlib, os, pathlib, tarfile, urllib.request
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])/'capi-header-contract'
+          work.mkdir()
+          version = '152.0.6+g708dc14+chromium-152.0.7977.83'
+          name = 'cef_binary_'+version+'_'+os.environ['CEF_PLATFORM']+'_minimal.tar.bz2'
+          archive = work/'headers-input.tar.bz2'
+          urllib.request.urlretrieve('https://cef-builds.spotifycdn.com/'+name, archive)
+          with archive.open('rb') as stream:
+              if hashlib.file_digest(stream,'sha512').hexdigest() != os.environ['EXPECTED_SHA512']:
+                  raise RuntimeError('Public-header input digest mismatch')
+          headers = work/'sdk'; headers.mkdir()
+          with tarfile.open(archive) as tar:
+              for entry in tar:
+                  parts = pathlib.PurePosixPath(entry.name).parts
+                  if entry.isfile() and len(parts)>2 and parts[1]=='include':
+                      relative = pathlib.PurePosixPath(*parts[1:])
+                      if '..' in relative.parts: raise RuntimeError('Unsafe header path')
+                      dest = headers/pathlib.Path(*relative.parts)
+                      dest.parent.mkdir(parents=True,exist_ok=True)
+                      dest.write_bytes(tar.extractfile(entry).read())
+          source = pathlib.Path('vcpkg/ports/cef-static/smoke.c').resolve().as_posix()
+          (work/'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.24)\nproject(capi_fixture LANGUAGES C)\nadd_library(capi_fixture OBJECT "'+source+'")\ntarget_include_directories(capi_fixture PRIVATE "'+headers.as_posix()+'")\ntarget_compile_definitions(capi_fixture PRIVATE CEF_STATIC CEF_API_VERSION=15200 _CRT_SECURE_NO_WARNINGS)\nset_target_properties(capi_fixture PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)\nif(MSVC)\n target_compile_options(capi_fixture PRIVATE /W4 /WX)\nelse()\n target_compile_options(capi_fixture PRIVATE -Wall -Wextra -Werror)\nendif()\n')
+          print('PUBLIC HEADER / OBJECT COMPILATION ONLY: no static engine success is asserted')
+      - name: Compile the fixture, without linking any engine
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          work=pathlib.Path(os.environ['RUNNER_TEMP'])/'capi-header-contract'
+          args=['cmake','-S',str(work),'-B',str(work/'build')]
+          if os.name=='nt': args += ['-G','Visual Studio 17 2022','-A','x64']
+          subprocess.run(args,check=True)
+          subprocess.run(['cmake','--build',str(work/'build'),'--config','Release'],check=True)
