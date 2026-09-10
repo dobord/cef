@@ -1,0 +1,63 @@
+name: Static engine source review
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-source-review.yml']
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Archive exact tracked recipe and pinned Chromium review inputs
+        shell: python
+        run: |
+          import ast, hashlib, json, pathlib, subprocess, urllib.request
+          out = pathlib.Path('review-inputs')
+          out.mkdir()
+          subprocess.run(['git', 'archive', '--format=zip', '-o', str(out/'cef-source.zip'), 'HEAD'], check=True)
+          revision = '79460ebecaa5625e57a5fb679a735659e73dc687'
+          paths = {
+              'BUILD.gn', '.gn', 'chrome/BUILD.gn', 'chrome/chrome_elf/BUILD.gn',
+              'chrome/chrome_elf/chrome_elf_main.cc', 'chrome/chrome_elf/chrome_elf_main.h',
+              'chrome/installer/mini_installer/BUILD.gn', 'chrome/install_static/BUILD.gn',
+              'chrome/install_static/initialize_from_primary_module.cc',
+              'gpu/command_buffer/service/shared_image/ozone_image_backing_factory.cc',
+              'gpu/command_buffer/service/shared_image/ozone_image_backing_factory.h',
+              'gpu/vulkan/buildflags.gni', 'build/config/BUILDCONFIG.gn',
+              'build/config/compiler/BUILD.gn', 'build/config/win/BUILD.gn',
+              'build/toolchain/win/BUILD.gn', 'build/toolchain/win/toolchain.gni',
+              'third_party/angle/BUILD.gn', 'third_party/angle/gni/angle.gni',
+          }
+          tree = ast.parse(pathlib.Path('vcpkg/ports/cef-static/patch_source.py').read_text())
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                  value = node.value
+                  if '\n' not in value and '/' in value and not value.startswith(('cef/', '//', 'http')) and value.endswith(('.gn', '.gni', '.h', '.cc')):
+                      paths.add(value)
+          receipt = []
+          for path in sorted(paths):
+              url = f'https://raw.githubusercontent.com/chromium/chromium/{revision}/{path}'
+              try:
+                  with urllib.request.urlopen(url, timeout=60) as response: data = response.read()
+              except Exception as error:
+                  receipt.append({'path': path, 'error': str(error)})
+                  continue
+              target = out/'chromium'/path
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+              receipt.append({'path': path, 'url': url, 'sha256': hashlib.sha256(data).hexdigest()})
+          (out/'sources.json').write_text(json.dumps({'chromium': revision, 'files': receipt}, indent=2)+'\n')
+      - name: Run recipe regression tests (not an engine build)
+        run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: static-source-review
+          path: review-inputs/
+          retention-days: 7
+          if-no-files-found: error
