@@ -1,0 +1,50 @@
+name: Static engine Windows source build
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-engine-windows.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Initialize the Windows wrappers without updating the pinned tools
+        shell: pwsh
+        env:
+          DEPOT_TOOLS_UPDATE: '0'
+          DEPOT_TOOLS_WIN_TOOLCHAIN: '0'
+        run: |
+          $depot = Join-Path $env:RUNNER_TEMP 'cef-static\depot_tools'
+          New-Item -Type Directory $depot -Force | Out-Null
+          git init $depot
+          if ($LASTEXITCODE) { throw 'git init failed' }
+          git -C $depot fetch --depth=1 https://chromium.googlesource.com/chromium/tools/depot_tools.git 08f3e8c0eb66d6de3a048a757d0ff708dbc8ea34
+          if ($LASTEXITCODE) { throw 'pinned depot_tools fetch failed' }
+          git -C $depot checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE) { throw 'pinned depot_tools checkout failed' }
+          $env:PATH = "$depot;$env:PATH"
+          Push-Location $depot
+          try {
+            & .\cipd_bin_setup.bat
+            if ($LASTEXITCODE) { throw 'CIPD bootstrap failed' }
+            & .\bootstrap\win_tools.bat
+            if ($LASTEXITCODE) { throw 'Windows tool bootstrap failed' }
+            & .\git.bat --version
+            if ($LASTEXITCODE) { throw 'git.bat wrapper missing' }
+          } finally { Pop-Location }
+      - name: Fetch pinned Chromium and CEF with all dependencies
+        run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ runner.temp }}/cef-static" --logs diagnostics
+      - name: Compile and run the static engine reference application
+        run: python vcpkg/ports/cef-static/source_build.py build --work "${{ runner.temp }}/cef-static" --logs diagnostics --jobs 4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: static-engine-windows-source-diagnostics
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
