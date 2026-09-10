@@ -1,0 +1,132 @@
+name: C API smoke controls (NOT a static engine build)
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-capi-control.yml']
+permissions:
+  contents: read
+jobs:
+  control:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux64
+            sha512: d37812c474c5368baac566646d30618026fda809f759c302ab72c5e462e7298b63ed64ab431057f2bb5e6dd284c3e2bc05a3a5c2318d0e82804a5019061c6fc2
+          - os: windows-2022
+            platform: windows64
+            sha512: a3f74a522c2a9ed855bd291435e239012f1647992ee2054f157eda6f02c98fc764128370a4e8198fb9e1db2a9762cdc66eda6b2ec4d02d12cf1b565507b2ae18
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CEF_PLATFORM: ${{ matrix.platform }}
+      CEF_SHA512: ${{ matrix.sha512 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Linux runtime prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libnss3 libgbm1 libgtk-3-0t64 libasound2t64 libxss1 xvfb xauth
+      - name: Negative module check and positive C API lifecycle control
+        shell: python
+        run: |
+          import hashlib, importlib.util, json, os, pathlib, shutil, subprocess, sys, tarfile, urllib.request
+          root = pathlib.Path.cwd()
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-capi-control'
+          work.mkdir()
+          logs = root/'control-evidence'
+          logs.mkdir()
+          script = root/'vcpkg/ports/cef-static/source_build.py'
+          spec = importlib.util.spec_from_file_location('control_helpers', script)
+          helpers = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(helpers)
+          version = '152.0.6+g708dc14+chromium-152.0.7977.83'
+          name = f'cef_binary_{version}_{os.environ["CEF_PLATFORM"]}_minimal.tar.bz2'
+          archive = work/'reference.tar.bz2'
+          urllib.request.urlretrieve('https://cef-builds.spotifycdn.com/'+name, archive)
+          with archive.open('rb') as stream:
+              if hashlib.file_digest(stream,'sha512').hexdigest() != os.environ['CEF_SHA512']:
+                  raise RuntimeError('Reference SDK digest mismatch')
+          with tarfile.open(archive) as bundle:
+              bundle.extractall(work/'reference', filter='data')
+          sdk, = (work/'reference').iterdir()
+          original = (root/'vcpkg/ports/cef-static/smoke.c').read_text()
+          (work/'negative.c').write_text(original)
+          positive = original.replace('static int engine_modules_are_static(void) {',
+                                      'static int no_shared_engine_modules(void) {', 1)
+          marker = 'static void close_browser(cef_browser_t* browser) {'
+          if positive.count(marker) != 1: raise RuntimeError('Control source context changed')
+          positive = positive.replace(marker,
+              '/* Positive control requires observing the known SHARED engine. */\n'
+              'static int engine_modules_are_static(void) { return !no_shared_engine_modules(); }\n\n'+marker, 1)
+          positive = positive.replace(r'\"engine\":\"static\"', r'\"engine\":\"shared-control\"')
+          positive = positive.replace('browser_modules_clean', 'browser_shared_engine_detected')
+          positive = positive.replace('renderer_modules_clean', 'renderer_shared_engine_detected')
+          positive = positive.replace('CEF_STATIC_SMOKE_PASS', 'CEF_SHARED_CONTROL_PASS')
+          (work/'positive.c').write_text(positive)
+          (work/'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.24)
+          project(cef_capi_controls LANGUAGES C)
+          set(CMAKE_C_STANDARD 11)
+          set(CMAKE_C_STANDARD_REQUIRED ON)
+          set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+          add_library(reference_cef SHARED IMPORTED)
+          if(WIN32)
+            set_target_properties(reference_cef PROPERTIES IMPORTED_LOCATION "${CEF_REFERENCE}/Release/libcef.dll" IMPORTED_IMPLIB "${CEF_REFERENCE}/Release/libcef.lib")
+          else()
+            set_target_properties(reference_cef PROPERTIES IMPORTED_LOCATION "${CEF_REFERENCE}/Release/libcef.so")
+          endif()
+          foreach(name negative positive)
+            add_executable(${name} "${name}.c")
+            target_include_directories(${name} PRIVATE "${CEF_REFERENCE}")
+            target_compile_definitions(${name} PRIVATE CEF_API_VERSION=15200 _CRT_SECURE_NO_WARNINGS)
+            target_link_libraries(${name} PRIVATE reference_cef)
+            if(MSVC)
+              target_link_options(${name} PRIVATE /STACK:0x800000)
+            endif()
+            set_target_properties(${name} PROPERTIES BUILD_RPATH "$ORIGIN")
+          endforeach()
+          ''')
+          build = work/'build'
+          command = ['cmake','-S',work,'-B',build,f'-DCEF_REFERENCE={sdk}']
+          if os.name == 'nt': command += ['-G','Visual Studio 17 2022','-A','x64']
+          helpers.run(command, work, logs, 'configure', timeout=120)
+          helpers.run(['cmake','--build',build,'--config','Release'], work, logs, 'compile', timeout=120)
+          results = {'schema':1,'full_static_engine_verified':False,'control_runtime':'shared',
+                     'cef_version':version,'source_commit':os.environ['GITHUB_SHA']}
+          for name in ('negative','positive'):
+              deploy = work/name
+              shutil.copytree(sdk/'Release', deploy)
+              shutil.copytree(sdk/'Resources', deploy, dirs_exist_ok=True)
+              exe = name+('.exe' if os.name == 'nt' else '')
+              shutil.copy2((build/'Release' if os.name == 'nt' else build)/exe, deploy/exe)
+              command = [str(deploy/exe)]
+              if os.name != 'nt': command = ['xvfb-run','-a',*command]
+              try:
+                  helpers.run(command, deploy, logs, name, timeout=120)
+              except RuntimeError as error:
+                  if name != 'negative' or 'exited 11;' not in str(error): raise
+                  if 'SHARED_ENGINE_MODULE_DETECTED' not in (logs/'negative.log').read_text(): raise
+                  if (deploy/'smoke-result.json').exists(): raise RuntimeError('Rejected binary wrote a false proof')
+                  results['negative_shared_engine_rejected'] = True
+              else:
+                  if name == 'negative': raise RuntimeError('Static checker accepted shared libcef')
+                  proof = json.loads((deploy/'smoke-result.json').read_text())
+                  if proof['engine'] != 'shared-control': raise RuntimeError('Control mislabelled as static')
+                  if not proof['javascript'] or not proof['paint'] or proof['browser_pid'] == proof['renderer_pid']:
+                      raise RuntimeError('C API control failed')
+                  if not proof['browser_shared_engine_detected'] or not proof['renderer_shared_engine_detected']:
+                      raise RuntimeError('Expected shared runtime not observed')
+                  results['positive_capi_lifecycle'] = proof
+          (logs/'control-result.json').write_text(json.dumps(results,indent=2)+'\n')
+          print('C API lifecycle and negative controls passed; static engine is NOT certified by this workflow.')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: capi-controls-${{ matrix.platform }}
+          path: control-evidence/
+          retention-days: 7
+          if-no-files-found: error
