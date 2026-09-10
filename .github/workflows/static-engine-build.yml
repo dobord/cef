@@ -40,8 +40,6 @@ jobs:
             triplet: x64-windows-static
     runs-on: ${{ matrix.os }}
     timeout-minutes: 350
-    env:
-      CEF_STATIC_WORK: ${{ runner.temp }}/cef-static
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
