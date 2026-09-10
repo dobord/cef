@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+set(CEF_VERSION "152.0.6+g708dc14+chromium-152.0.7977.83")
+set(CEF_ENGINE_LINKAGE SHARED)
+set(CEF_WRAPPER_LINKAGE STATIC)
+set(CEF_RUNTIME_DIR "${PACKAGE_PREFIX_DIR}/tools/cef")
+if(NOT TARGET CEF::runtime)
+    add_library(CEF::runtime SHARED IMPORTED)
+    if(WIN32)
+        set_target_properties(CEF::runtime PROPERTIES
+            IMPORTED_LOCATION "${CEF_RUNTIME_DIR}/libcef.dll"
+            IMPORTED_IMPLIB "${CEF_RUNTIME_DIR}/libcef.lib")
+    else()
+        set_target_properties(CEF::runtime PROPERTIES
+            IMPORTED_LOCATION "${CEF_RUNTIME_DIR}/libcef.so"
+            IMPORTED_SONAME libcef.so)
+    endif()
+endif()
+if(NOT WIN32)
+    find_dependency(Threads)
+    find_dependency(X11)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/cef-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/cef-deploy.cmake")
+check_required_components(cef)

@@ -1,0 +1,72 @@
+name: vcpkg hybrid baseline (NOT static engine)
+on:
+  push:
+    branches: [vcpkg]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [vcpkg]
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: cef-vcpkg-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+jobs:
+  build:
+    name: ${{ matrix.triplet }} / static wrapper + shared engine
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            triplet: x64-linux
+          - os: windows-2022
+            triplet: x64-windows-static
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Linux build and runtime dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libx11-dev libnss3 libgbm1 libgtk-3-0t64 libasound2t64 libxss1 xvfb xauth
+      - name: Build port, export SDK, link and run relocated Debug and Release consumers
+        run: python vcpkg/ci/build.py --triplet ${{ matrix.triplet }}
+      - name: Preserve package and test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cef-${{ matrix.triplet }}-hybrid
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+  publish:
+    name: Attach explicitly hybrid SDKs to release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Download packages produced by this successful run
+        run: |
+          mkdir artifacts
+          gh run download "$RUN_ID" --repo "$GH_REPO" --dir artifacts
+          test "$(find artifacts -name '*-static-wrapper-shared-runtime.zip' | wc -l)" -eq 2
+      - name: Upload archives and SHA-256 checksums without overwriting existing assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' packages < <(find artifacts -type f \( -name '*-static-wrapper-shared-runtime.zip' -o -name '*.sha256' \) -print0)
+          test "${#packages[@]}" -eq 4
+          gh release upload "$RELEASE_TAG" "${packages[@]}" --repo "$GH_REPO"

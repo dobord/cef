@@ -1,0 +1,15 @@
+CEF 152.0.6: static C++ wrapper, SHARED engine (libcef.dll / libcef.so).
+This is NOT a monolithic static Chromium/CEF library.
+
+  find_package(cef CONFIG REQUIRED)
+  target_link_libraries(app PRIVATE CEF::wrapper)
+  cef_deploy_runtime(app)
+
+Public headers: #include "include/cef_app.h"
+C++20; CEF_API_VERSION=15200 is exported transitively.
+Windows x64: /MT or /MTd follows the vcpkg triplet; executable stack is 8 MiB.
+Both wrapper configurations use the official Release engine through the C ABI.
+Runtime and resources reside in tools/cef and must accompany the executable.
+The Windows bootstrap/sandbox integration is NOT provided by this port.
+The CI smoke fixture uses no_sandbox ONLY for its fixed local test document.
+Do not use that fixture's security settings for untrusted content.
