@@ -21,7 +21,7 @@ CEF_COMMIT = '708dc140cbc3286826a8abef89dc23a44ff9ea72'
 CHROMIUM_COMMIT = '79460ebecaa5625e57a5fb679a735659e73dc687'
 CEF_VERSION = '152.0.6+g708dc14+chromium-152.0.7977.83'
 BINARY_SUFFIXES = {'.o', '.obj', '.a', '.lib', '.rlib', '.res'}
-FORBIDDEN = re.compile(r'(libcef\.(dll|so)|chrome_elf\.dll|lib(?:egl|glesv2|vk_swiftshader)\.(dll|so)|dxcompiler(?:\.dll)?\.lib|dxcompiler\.dll|dxil\.dll)', re.I)
+FORBIDDEN = re.compile(r'(libcef\.(dll|so)|chrome_elf\.dll|lib(?:egl|glesv2|vk_swiftshader)\.(dll|so)|dxcompiler\.(dll|lib)|dxil\.(dll|lib))', re.I)
 # Rust can pass OS import libraries via ldflags rather than GN's libs array.
 # Accept only names observed in the pinned Windows graph, not arbitrary paths.
 WINDOWS_FLAG_LIBRARIES = frozenset({
@@ -168,8 +168,8 @@ def verify_reference(receipt: dict) -> None:
     for field in ('javascript', 'paint', 'browser_modules_clean', 'renderer_modules_clean'):
         if proof.get(field) is not True:
             raise RuntimeError(f'Reference runtime check was not verified: {field}')
-    if not isinstance(proof.get('renderer_pid'), int) or proof['renderer_pid'] <= 0 or \
-            not isinstance(proof.get('browser_pid'), int) or proof['browser_pid'] <= 0 or \
+    if type(proof.get('renderer_pid')) is not int or proof['renderer_pid'] <= 0 or \
+            type(proof.get('browser_pid')) is not int or proof['browser_pid'] <= 0 or \
             proof['renderer_pid'] == proof['browser_pid']:
         raise RuntimeError('Reference receipt has no separate renderer proof')
 

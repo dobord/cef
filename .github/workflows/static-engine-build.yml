@@ -18,10 +18,14 @@ permissions:
   contents: read
 concurrency:
   group: static-engine-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'release' }}
+  cancel-in-progress: false
 jobs:
   contract:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -29,18 +33,28 @@ jobs:
       - run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
       - run: python -m compileall -q vcpkg/ports/cef-static vcpkg/static
   source-build:
+    # Do not execute pull-request code on persistent/self-hosted machines.
+    if: github.event_name != 'pull_request'
     needs: contract
+    concurrency:
+      group: cef-static-workspace-${{ matrix.triplet }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
+          - runner_labels: ${{ vars.CEF_STATIC_LINUX_RUNNER_LABELS || '["ubuntu-24.04"]' }}
+            work_root: ${{ vars.CEF_STATIC_LINUX_WORK }}
             triplet: x64-linux
-          - os: windows-2022
+          - runner_labels: ${{ vars.CEF_STATIC_WINDOWS_RUNNER_LABELS || '["windows-2022"]' }}
+            work_root: ${{ vars.CEF_STATIC_WINDOWS_WORK }}
             triplet: x64-windows-static
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 350
+    runs-on: ${{ fromJSON(matrix.runner_labels) }}
+    timeout-minutes: ${{ fromJSON(vars.CEF_STATIC_JOB_TIMEOUT_MINUTES || '350') }}
     env:
+      CEF_STATIC_WORK: ${{ matrix.work_root }}
+      CEF_STATIC_BUILD_TIMEOUT_SECONDS: ${{ vars.CEF_STATIC_BUILD_TIMEOUT_SECONDS || '18000' }}
+      CEF_STATIC_JOBS: ${{ vars.CEF_STATIC_JOBS || '4' }}
       CCACHE_DIR: ${{ github.workspace }}/.cef-ccache
       CCACHE_MAXSIZE: 4G
       CCACHE_COMPILERCHECK: content
@@ -48,8 +62,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Linux runner capacity and build-test utilities
-        if: runner.os == 'Linux'
+      - name: Linux hosted-runner capacity and build-test utilities
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup
           sudo apt-get update
@@ -60,29 +74,19 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/source_build.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/patch_source.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/source_build.py') }}-
+            cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/patch_source.py') }}-
             cef-static-152-linux-
       - name: Test native launchers in actual vcpkg scope before source checkout
         run: python vcpkg/static/toolcheck.py --triplet ${{ matrix.triplet }}
       - name: Resolve and verify the complete pinned source trees
-        run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ runner.temp }}/cef-static" --logs static-diagnostics/bootstrap
+        run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}" --logs static-diagnostics/bootstrap
       - name: Install official Chromium Linux build prerequisites
-        if: runner.os == 'Linux'
-        run: sudo "${{ runner.temp }}/cef-static/download/chromium/src/build/install-build-deps.sh" --no-prompt --no-arm --no-chromeos-fonts
-      - name: Configure and validate the static-only graph (no premature one-hour compile)
-        shell: python
-        run: |
-          import os, pathlib, sys
-          sys.path.insert(0, str(pathlib.Path('vcpkg/ports/cef-static').resolve()))
-          import source_build as build
-          work = pathlib.Path(os.environ['RUNNER_TEMP']) / 'cef-static'
-          logs = pathlib.Path('static-diagnostics/configure').resolve()
-          logs.mkdir(parents=True, exist_ok=True)
-          build.setup_environment(work)
-          source = build.prepare(work, logs)
-          build.configuration(source, logs)
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: sudo "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}/download/chromium/src/build/install-build-deps.sh" --no-prompt --no-arm --no-chromeos-fonts
+      - name: Check static graph and export options (no native compilation)
+        run: python vcpkg/ports/cef-static/source_build.py check --work "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}" --logs static-diagnostics/configure
       - name: Preserve configuration evidence before the engine build
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -104,7 +108,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/source_build.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: cef-static-152-linux-${{ hashFiles('vcpkg/ports/cef-static/patch_source.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preserve diagnostic evidence, including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

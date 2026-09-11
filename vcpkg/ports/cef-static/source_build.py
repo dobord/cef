@@ -5,6 +5,7 @@ Stages are explicit. A successful prepare/configure is NOT a successful engine
 build. Only a linked, relocated executable with a valid runtime proof qualifies.
 """
 from __future__ import annotations
+from contextlib import contextmanager, ExitStack
 import argparse
 import datetime as dt
 import hashlib
@@ -18,8 +19,8 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 import tempfile
+import time
 import urllib.request
 
 HERE = Path(__file__).resolve().parent
@@ -29,6 +30,23 @@ CHROMIUM_VERSION = '152.0.7977.83'
 DEPOT = '08f3e8c0eb66d6de3a048a757d0ff708dbc8ea34'
 AUTOMATE_SHA256 = 'fe0c880fd2a91ac3ab4c82301f596295cecc1901e503507e36300a5b58578dcd'
 WINDOWS = os.name == 'nt'
+
+
+def positive_env(name: str, default: int, maximum: int) -> int:
+    """Validate operational limits before starting expensive subprocesses."""
+    value = os.environ.get(name, str(default))
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise ValueError(f'{name} must be an integer, got {value!r}') from error
+    if not 1 <= number <= maximum:
+        raise ValueError(f'{name} must be between 1 and {maximum}, got {number}')
+    return number
+
+
+def build_timeout() -> int:
+    # Hosts may set a larger budget; no timeout ever counts as build success.
+    return positive_env('CEF_STATIC_BUILD_TIMEOUT_SECONDS', 18000, 172800)
 
 
 def digest(path: Path) -> str:
@@ -49,7 +67,7 @@ def kill_tree(process: subprocess.Popen) -> None:
 def run(command: list[str | Path], cwd: Path, logs: Path, name: str,
         timeout: int = 3600, quiet: bool = False) -> str:
     args = list(map(str, command))
-    if args and args[0] == 'git':
+    if args and args[0].lower() in ('git', 'git.exe'):
         args[0] = git_program()
     logs.mkdir(parents=True, exist_ok=True)
     log_path = logs / (name + '.log')
@@ -68,13 +86,32 @@ def run(command: list[str | Path], cwd: Path, logs: Path, name: str,
                     print(line, end='', flush=True)
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
+        started = time.monotonic()
+        status = {'schema': 1, 'name': name, 'command': args,
+                  'timeout_seconds': timeout, 'status': 'running'}
         try:
             code = process.wait(timeout=timeout)
-        except BaseException:
+            status['status'] = 'success' if code == 0 else 'failed'
+        except subprocess.TimeoutExpired as error:
+            status['status'] = 'timed_out'
             kill_tree(process)
-            reader.join(timeout=20)
+            raise RuntimeError(
+                f'{name} timed out after {timeout}s; see {log_path}. '
+                'No build success is recorded. The source workspace is preserved '
+                'for an incremental retry.') from error
+        except BaseException:
+            status['status'] = 'interrupted'
+            kill_tree(process)
             raise
-        reader.join(timeout=20)
+        finally:
+            reader.join(timeout=20)
+            # Popen owns the pipe; the reader does not close it automatically.
+            if not reader.is_alive() and process.stdout is not None:
+                process.stdout.close()
+            status['elapsed_seconds'] = round(time.monotonic() - started, 3)
+            status['exit_code'] = process.poll()
+            (logs / (name + '-status.json')).write_text(
+                json.dumps(status, indent=2) + '\n', encoding='utf-8')
     if code != 0:
         raise RuntimeError(f'{name} exited {code}; see {log_path}')
     return log_path.read_text(encoding='utf-8')
@@ -116,7 +153,7 @@ def setup_environment(work: Path) -> None:
     os.environ['DEPOT_TOOLS_WIN_TOOLCHAIN'] = '0'
     os.environ['PYTHONUNBUFFERED'] = '1'
     os.environ['PATH'] = os.pathsep.join((str(work/'depot_tools'),
-                                         str(Path(git).parent), os.environ['PATH']))
+                                         str(Path(git).parent), os.environ.get('PATH', '')))
     # No GN_DEFINES from an unrelated shell may silently change this recipe.
     os.environ.pop('GN_DEFINES', None)
 
@@ -328,6 +365,15 @@ def configuration(source: Path, logs: Path) -> Path:
     export_spec.loader.exec_module(exporter)
     inputs = exporter.query_link_inputs(query)
     (logs/'static-link-inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
+    # Audit exportability now, not after a multi-hour native build. No linker
+    # script is copied at this stage; the exporter still checks its path later.
+    root = json.loads(graph)['//cef:cef_static_smoke']
+    flags, omitted = exporter.link_options(root.get('ldflags', []), WINDOWS, lambda p: p)
+    (logs/'link-option-audit.json').write_text(json.dumps({
+        'schema': 1, 'semantic_link_flags': flags,
+        'omitted_build_host_flags': omitted,
+        'engine_link_verified': False, 'engine_runtime_verified': False,
+    }, indent=2)+'\n')
     return out
 
 
@@ -357,10 +403,46 @@ def compile_regressions(source: Path, out: Path, logs: Path, jobs: int) -> None:
     selected = regression_targets(inputs, WINDOWS)
     (logs/'regression-targets.json').write_text(json.dumps(selected, indent=2)+'\n')
     run([ninja, '-C', out, '-j', str(jobs), '-d', 'keeprsp', *selected],
-        source, logs, 'regression-compile', timeout=3600)
+        source, logs, 'regression-compile', timeout=build_timeout())
     receipt = {'schema': 1, 'compiled_objects': selected,
                'engine_link_verified': False, 'engine_runtime_verified': False}
     (logs/'regression-compile-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
+
+
+@contextmanager
+def hidden_directories(paths: list[Path]):
+    """Hide SDK/source roots transactionally; never delete data on restore failure."""
+    @contextmanager
+    def hide(path: Path):
+        container = Path(tempfile.mkdtemp(prefix='.cef-hidden-', dir=path.parent))
+        hidden = container/'payload'
+        try:
+            path.rename(hidden)
+        except BaseException:
+            container.rmdir()
+            raise
+        try:
+            yield
+        finally:
+            # If restoring fails, leave the original tree in the container.
+            # TemporaryDirectory would delete it here and must not be used.
+            hidden.rename(path)
+            container.rmdir()
+    with ExitStack() as stack:
+        for path in paths:
+            stack.enter_context(hide(path))
+        yield
+
+
+def verify_binary_imports(imports: str, windows: bool) -> None:
+    forbidden = ('libcef.dll', 'libcef.so', 'chrome_elf.dll', 'libegl.dll',
+                 'libglesv2.dll', 'libegl.so', 'libglesv2.so', 'libvk_swiftshader',
+                 'dxcompiler.dll', 'dxil.dll', 'ffmpeg.dll', 'libffmpeg.so')
+    if windows:
+        forbidden += ('vcruntime140', 'msvcp140', 'ucrtbase.dll')
+    hits = [name for name in forbidden if name in imports.lower()]
+    if hits:
+        raise RuntimeError('Executable imports forbidden shared dependencies: ' + ', '.join(hits))
 
 
 def execute_smoke(exe: Path, logs: Path) -> dict:
@@ -382,19 +464,23 @@ def execute_smoke(exe: Path, logs: Path) -> dict:
         raise RuntimeError('Static engine version does not match the source pin')
     if proof.get('engine') != 'static' or not all(proof.get(k) is True for k in required):
         raise RuntimeError('Incomplete static engine runtime proof')
-    if proof['browser_pid'] <= 0 or proof['renderer_pid'] <= 0 or proof['browser_pid'] == proof['renderer_pid']:
+    if (type(proof.get('browser_pid')) is not int or type(proof.get('renderer_pid')) is not int or
+            proof['browser_pid'] <= 0 or proof['renderer_pid'] <= 0 or
+            proof['browser_pid'] == proof['renderer_pid']):
         raise RuntimeError('A real separate renderer was not observed')
     shutil.copy2(exe.parent/'smoke-result.json', logs/'smoke-result.json')
     return proof
 
 
 def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
+    # An unsuccessful retry must not leave a previous success receipt behind.
+    (logs/'engine-build-receipt.json').unlink(missing_ok=True)
     out = configuration(source, logs)
     ninja = find_binary(source, ['third_party/ninja/ninja.exe'] if WINDOWS else ['third_party/ninja/ninja'])
     run([ninja, '-C', out, '-j', str(jobs), '-d', 'keeprsp', 'cef_static_smoke'],
-        source, logs, 'engine-build', timeout=18000)
-    deploy = work/'static-deploy'
-    deploy.mkdir(exist_ok=False)
+        source, logs, 'engine-build', timeout=build_timeout())
+    # Reusing a source workspace must not reuse an old executable/profile.
+    deploy = Path(tempfile.mkdtemp(prefix='static-deploy-', dir=work))
     exe = out/('cef_static_smoke.exe' if WINDOWS else 'cef_static_smoke')
     shutil.copy2(exe, deploy/exe.name)
     # Only data, never DLL/SO files. Missing required data must fail the smoke.
@@ -411,11 +497,7 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
     else:
         imports = run(['readelf', '-d', deploy/exe.name], source, logs, 'binary-imports')
         run(['ldd', deploy/exe.name], source, logs, 'runtime-libraries')
-    forbidden = ('libcef.dll', 'libcef.so', 'chrome_elf.dll', 'libegl.dll',
-                 'libglesv2.dll', 'libegl.so', 'libglesv2.so', 'libvk_swiftshader',
-                 'dxcompiler.dll', 'dxil.dll')
-    if any(name in imports.lower() for name in forbidden):
-        raise RuntimeError('Executable imports a forbidden shared engine dependency')
+    verify_binary_imports(imports, WINDOWS)
     proof = execute_smoke(deploy/exe.name, logs)
     receipt = {'schema': 1, 'cef_commit': CEF, 'chromium_commit': CHROMIUM,
                'depot_tools_commit': DEPOT, 'platform': platform.platform(),
@@ -427,16 +509,20 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
                'integration_commit': os.environ.get('GITHUB_SHA'),
                'executable_sha256': digest(deploy/exe.name)}
     (logs/'engine-build-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
+    shutil.rmtree(deploy)  # This directory was created by this invocation only.
     print('STATIC_ENGINE_CAPI_REFERENCE_VERIFIED', flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('phase', choices=['tools', 'prepare', 'check', 'build'])
+    parser.add_argument('phase', choices=['tools', 'prepare', 'check', 'regressions', 'build'])
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--logs', type=Path, required=True)
-    parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--jobs', type=int, default=positive_env('CEF_STATIC_JOBS', 4, 1024))
     args = parser.parse_args()
+    if not 1 <= args.jobs <= 1024:
+        parser.error('--jobs must be between 1 and 1024')
+    build_timeout()  # Validate before downloading or changing source files.
     if platform.machine().lower() not in ('x86_64', 'amd64') or sys.platform not in ('linux', 'win32'):
         raise RuntimeError('Only native Windows/Linux x64 builds are supported')
     work, logs = args.work.resolve(), args.logs.resolve()
@@ -446,9 +532,17 @@ def main() -> None:
         check_tools(work, logs)
         return
     source = prepare(work, logs)
-    if args.phase == 'check':
+    if args.phase in ('check', 'regressions'):
         out = configuration(source, logs)
-        compile_regressions(source, out, logs, args.jobs)
+        if args.phase == 'regressions':
+            # Object targets can depend on almost the entire engine through
+            # generated-header/order-only edges. This is NOT a cheap preflight.
+            compile_regressions(source, out, logs, args.jobs)
+        else:
+            (logs/'configuration-receipt.json').write_text(json.dumps({
+                'schema': 1, 'phase': 'graph-only',
+                'engine_link_verified': False, 'engine_runtime_verified': False,
+            }, indent=2)+'\n')
     if args.phase == 'build':
         compile_and_test(source, work, logs, args.jobs)
     print(json.dumps({'phase_completed': args.phase, 'source': str(source)}), flush=True)

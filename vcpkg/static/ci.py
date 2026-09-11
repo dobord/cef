@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,14 +28,22 @@ def main() -> None:
     args = parser.parse_args()
     if WINDOWS != (args.triplet == 'x64-windows-static'):
         raise RuntimeError('Native triplet required')
-    work = Path(os.environ['RUNNER_TEMP'])/'cef-static'
+    default_work = Path(os.environ.get('RUNNER_TEMP', tempfile.gettempdir()))/'cef-static'
+    work = Path(os.environ.get('CEF_STATIC_WORK') or default_work).resolve()
+    work.mkdir(parents=True, exist_ok=True)
     os.environ['CEF_STATIC_WORK'] = str(work)
+    # Keep Chromium/Ninja objects, but never reuse consumer builds or receipts.
+    session = Path(tempfile.mkdtemp(prefix='cef-sdk-test-', dir=work))
     os.environ['VCPKG_BINARY_SOURCES'] = 'clear'
-    os.environ['VCPKG_MAX_CONCURRENCY'] = '4'
+    jobs = build.positive_env('CEF_STATIC_JOBS', 4, 1024)
+    os.environ['VCPKG_MAX_CONCURRENCY'] = str(jobs)
     artifacts = ROOT/'static-artifacts'; artifacts.mkdir(exist_ok=True)
+    if any(artifacts.iterdir()):
+        raise RuntimeError('static-artifacts must be empty; refusing to mix results from different runs')
     diagnostics = ROOT/'static-diagnostics'; diagnostics.mkdir(exist_ok=True)
-    manager = Path(os.environ['RUNNER_TEMP'])/'cef-vcpkg-manager'
-    run = lambda command, cwd, name: build.run(command,cwd,diagnostics,name,timeout=21600)
+    manager = session/'vcpkg-manager'
+    run = lambda command, cwd, name: build.run(
+        command,cwd,diagnostics,name,timeout=build.build_timeout()+10800)
     try:
         run(['git','init',manager],ROOT,'vcpkg-init')
         run(['git','fetch','--depth=1','https://github.com/microsoft/vcpkg.git',VCPKG_COMMIT],manager,'vcpkg-fetch')
@@ -45,18 +54,18 @@ def main() -> None:
         run([binary,'install',f'cef-static:{args.triplet}','--classic',
              f'--overlay-ports={ROOT / "vcpkg/ports"}',
              f'--overlay-triplets={ROOT / "vcpkg/static/triplets"}'],manager,'vcpkg-install')
-        export = work/'vcpkg-export'
+        export = session/'vcpkg-export'
         name = f'cef-152.0.6-{args.triplet}-static-engine-capi'
         run([binary,'export',f'cef-static:{args.triplet}','--classic','--raw',
              f'--output={name}',f'--output-dir={export}'],manager,'vcpkg-export')
-        sdk = work/'relocated-static-sdk'
+        sdk = session/'relocated-static-sdk'
         shutil.move(str(export/name),sdk)
         installed = manager/'installed'
         installed.rename(manager/'installed-hidden-for-consumer-test')
         prefix = sdk/'installed'/args.triplet
         if not (prefix/'share/cef-static/cef-static-config.cmake').is_file():
             raise RuntimeError('Missing exported CMake package')
-        consumer = work/'external-static-consumer'
+        consumer = session/'external-static-consumer'
         configure = ['cmake','-S',ROOT/'vcpkg/static/consumer','-B',consumer,
                      f'-DCMAKE_PREFIX_PATH={prefix}',
                      f'-DCEF_STATIC_SMOKE_SOURCE={PORT / "smoke.c"}',
@@ -66,24 +75,26 @@ def main() -> None:
         run(configure,ROOT,'external-consumer-configure')
         run(['cmake','--build',consumer,'--config','Release','--parallel','4'],ROOT,'external-consumer-build')
         binary_dir = consumer/'Release' if WINDOWS else consumer
-        deployed = work/'relocated-static-application'
+        deployed = session/'relocated-static-application'
         shutil.copytree(binary_dir,deployed,ignore=shutil.ignore_patterns('CMakeFiles','CMakeCache.txt','*.vcxproj*','*.sln','Makefile'))
         executable = deployed/('cef_static_smoke.exe' if WINDOWS else 'cef_static_smoke')
         # Hide both SDK and the entire Chromium tree during execution. No
         # source-workspace runtime fallback can make this test accidentally pass.
         original_source = work/'download'
-        hidden_source = work/'source-hidden-for-runtime-test'
-        hidden_sdk = work/'sdk-hidden-for-runtime-test'
-        sdk.rename(hidden_sdk); original_source.rename(hidden_source)
-        try:
+        if WINDOWS:
+            readobj = build.find_binary(original_source/'chromium/src', [
+                'third_party/llvm-build/Release+Asserts/bin/llvm-readobj.exe'])
+            imports = run([readobj, '--coff-imports', '--coff-load-config', executable],
+                          ROOT, 'external-binary-imports')
+            build.verify_binary_imports(imports, True)
+        with build.hidden_directories([sdk, original_source]):
             proof = build.execute_smoke(executable,diagnostics)
             if not WINDOWS:
                 dependency_log = run(['ldd',executable],ROOT,'external-runtime-libraries')
                 if 'not found' in dependency_log or 'libcef.so' in dependency_log:
                     raise RuntimeError('External app has unresolved/shared-engine dependencies')
-                run(['readelf','-d',executable],ROOT,'external-binary-imports')
-        finally:
-            hidden_source.rename(original_source); hidden_sdk.rename(sdk)
+                imports = run(['readelf','-d',executable],ROOT,'external-binary-imports')
+                build.verify_binary_imports(imports, False)
         receipt = {'schema':1,'integration_commit':os.environ['GITHUB_SHA'],
                    'vcpkg_commit':VCPKG_COMMIT,'cef_commit':build.CEF,
                    'chromium_commit':build.CHROMIUM,'triplet':args.triplet,
@@ -110,5 +121,6 @@ def main() -> None:
                 if path.is_file() and (path.suffix in ('.log','.json') or path.name=='args.gn'):
                     dest = diagnostics/'port'/path.relative_to(port_logs)
                     dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(path,dest)
+    shutil.rmtree(session)  # Success only; belongs exclusively to this invocation.
 
 if __name__=='__main__': main()
