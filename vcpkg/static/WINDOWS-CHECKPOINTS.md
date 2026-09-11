@@ -40,9 +40,12 @@ Do not treat a checkpoint as a redistributable vcpkg package or deploy it.
 
 If Ninja completes, the unchanged vcpkg build/export and native plus relocated
 external-consumer runtime checks run. Only that successful `package` step may
-publish `cef-static-x64-windows-static`. A successful checkpoint iteration alone
+publish `cef-static-x64-windows-static-sdk-<attempt>`. A successful checkpoint iteration alone
 cannot publish an SDK or attach a release asset. Release publication additionally
 requires both platform SDKs from the same run and the original proof/hash gates.
+The latest valid artifact for each platform from any attempt of that same run
+is selected; the integration SHA must still match. Diagnostics and test artifacts
+also carry the attempt number, so reruns do not overwrite immutable artifacts.
 A native link, runtime or exporter error remains a build failure.
 
 The Windows change leaves the Linux build path, its ccache and the Dawn/Ozone
@@ -60,7 +63,9 @@ limit does not fix the loss of progress.
 its workspace to a **different hosted runner**, finishes the link without
 recompiling the existing object, and then changes a header to prove Ninja's
 restored dependency tracking still rebuilds correctly. It separately tests real
-Ninja interruption and removal of unfinished output. These tests are **not CEF
+Ninja interruption and removal of unfinished output. Windows regression tests
+invoke the Visual Studio native `ninja.exe` directly instead of a possible
+Chocolatey launcher shim; production invokes the pinned Chromium Ninja directly. These tests are **not CEF
 engine builds**; the real Chromium-size checkpoint transfer, full source build,
 link/run and vcpkg packaging must still finish before claiming a static CEF SDK.
 

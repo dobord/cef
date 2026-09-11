@@ -38,7 +38,7 @@ jobs:
         run: python vcpkg/static/checkpoint_probe.py produce
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: native-checkpoint-${{ matrix.os }}
+          name: native-checkpoint-${{ matrix.os }}-${{ github.run_attempt }}
           path: checkpoint-probe-artifact/
           retention-days: 3
           if-no-files-found: error
@@ -64,13 +64,13 @@ jobs:
           }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: native-checkpoint-${{ matrix.os }}
+          name: native-checkpoint-${{ matrix.os }}-${{ github.run_attempt }}
           path: checkpoint-probe-artifact/
       - name: Finish native link on fresh runner, verify reuse and header invalidation
         run: python vcpkg/static/checkpoint_probe.py consume
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: checkpoint-handoff-proof-${{ matrix.os }}
+          name: checkpoint-handoff-proof-${{ matrix.os }}-${{ github.run_attempt }}
           path: checkpoint-probe-result.json
           retention-days: 14
           if-no-files-found: error

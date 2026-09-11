@@ -103,7 +103,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cef-static-${{ matrix.triplet }}-configuration
+          name: cef-static-${{ matrix.triplet }}-configuration-${{ github.run_attempt }}
           path: static-diagnostics/configure/
           if-no-files-found: warn
           retention-days: 7
@@ -140,7 +140,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cef-static-${{ matrix.triplet }}-diagnostics
+          name: cef-static-${{ matrix.triplet }}-diagnostics-${{ github.run_attempt }}
           path: static-diagnostics/
           if-no-files-found: warn
           retention-days: 7
@@ -148,7 +148,7 @@ jobs:
         if: success() && steps.package.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cef-static-${{ matrix.triplet }}
+          name: cef-static-${{ matrix.triplet }}-sdk-${{ github.run_attempt }}
           path: static-artifacts/
           if-no-files-found: error
           retention-days: 7
@@ -157,6 +157,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       ready: ${{ steps.check.outputs.ready }}
+      linux: ${{ steps.check.outputs.linux }}
+      windows: ${{ steps.check.outputs.windows }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -170,9 +172,15 @@ jobs:
           result = subprocess.check_output(['gh', 'api',
               'repos/'+os.environ['GH_REPO']+'/actions/runs/'+os.environ['RUN_ID']+'/artifacts?per_page=100'], text=True)
           names = {a['name'] for a in json.loads(result)['artifacts'] if not a['expired']}
-          ready = {'cef-static-x64-linux', 'cef-static-x64-windows-static'} <= names
+          selected = {}
+          for platform, triplet in [('linux', 'x64-linux'), ('windows', 'x64-windows-static')]:
+              prefix = 'cef-static-'+triplet+'-sdk-'
+              candidates = [n for n in names if n.startswith(prefix) and n[len(prefix):].isdigit()]
+              if candidates: selected[platform] = max(candidates, key=lambda n: int(n[len(prefix):]))
+          ready = len(selected) == 2
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('ready='+str(ready).lower()+'\n')
+              for platform, name in selected.items(): output.write(platform+'='+name+'\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('Both tested SDKs are available.\n' if ready else
                   '**No complete Windows/Linux SDK pair yet.** A checkpoint is not a release.\n')
@@ -189,11 +197,13 @@ jobs:
       RUN_ID: ${{ github.run_id }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       EXPECTED_COMMIT: ${{ github.sha }}
+      LINUX_SDK: ${{ needs.sdk-readiness.outputs.linux }}
+      WINDOWS_SDK: ${{ needs.sdk-readiness.outputs.windows }}
     steps:
       - name: Retrieve only SDKs from this successful run
         run: |
-          gh run download "$RUN_ID" --repo "$GH_REPO" --name cef-static-x64-linux --dir artifacts/linux
-          gh run download "$RUN_ID" --repo "$GH_REPO" --name cef-static-x64-windows-static --dir artifacts/windows
+          gh run download "$RUN_ID" --repo "$GH_REPO" --name "$LINUX_SDK" --dir artifacts/linux
+          gh run download "$RUN_ID" --repo "$GH_REPO" --name "$WINDOWS_SDK" --dir artifacts/windows
       - name: Verify static runtime proofs, source commit and archive hashes
         shell: python
         run: |
