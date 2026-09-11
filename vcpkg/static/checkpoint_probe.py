@@ -5,8 +5,24 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import checkpoint as cp
+
+
+def native_ninja():
+    # Chocolatey may put a console-launcher shim before the native Ninja.
+    # CTRL_BREAK must target Ninja itself, as the CEF build does with its pin.
+    if os.name == 'nt':
+        vswhere = Path(os.environ['ProgramFiles(x86)'])/'Microsoft Visual Studio/Installer/vswhere.exe'
+        install = subprocess.check_output([str(vswhere), '-latest', '-products', '*',
+            '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+            '-property', 'installationPath'], text=True).strip()
+        ninja = Path(install)/'Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe'
+        if not ninja.is_file():
+            raise RuntimeError('Native Visual Studio Ninja is required for the Windows regression')
+        return str(ninja)
+    return shutil.which('ninja')
 
 
 def run(args, cwd=None):
@@ -28,7 +44,7 @@ def main():
         (work/'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.24)\n'
             'project(checkpoint_probe C)\nadd_library(first STATIC first.c)\n'
             'add_executable(probe main.c)\ntarget_link_libraries(probe PRIVATE first)\n')
-        run(['cmake','-S',work,'-B',work/'build','-G','Ninja','-DCMAKE_BUILD_TYPE=Release'])
+        run(['cmake','-S',work,'-B',work/'build','-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_MAKE_PROGRAM='+native_ninja()])
         run(['cmake','--build',work/'build','--target','first'])
         obj=next((work/'build/CMakeFiles/first.dir').glob('*.obj' if os.name=='nt' else '*.o'))
         descriptor={'object':obj.relative_to(work).as_posix(),'mtime_ns':obj.stat().st_mtime_ns,'sha256':cp.digest(obj)}

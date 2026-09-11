@@ -18,6 +18,9 @@ STATIC = Path(__file__).resolve().parents[3]/'static'
 sys.path.insert(0, str(STATIC))
 import checkpoint as cp
 import windows_slice as sliced
+from checkpoint_probe import native_ninja
+NINJA = native_ninja()
+print("Checkpoint regression native Ninja:", NINJA, flush=True)
 
 IDENTITY = {'recipe': 'unit-fixture-not-cef', 'work': 'stable-path', 'image': 'test'}
 
@@ -107,12 +110,12 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):cp.restore(self.package,self.work,IDENTITY)
 
 
-@unittest.skipUnless(shutil.which('ninja'), 'Native Ninja required')
+@unittest.skipUnless(NINJA, 'Native Ninja required')
 class NinjaStopTests(unittest.TestCase):
     def test_ninja_can_finish_without_any_runtime_certificate(self):
         with tempfile.TemporaryDirectory() as temp:
             work=Path(temp);(work/'build.ninja').write_text('build all: phony\ndefault all\n')
-            result=sliced.run_ninja(['ninja'],work,work/'log.txt',5)
+            result=sliced.run_ninja([NINJA],work,work/'log.txt',5)
             self.assertEqual(result['status'],'complete');self.assertFalse(result['engine_runtime_verified'])
 
     def test_actual_command_error_is_not_a_checkpoint(self):
@@ -120,7 +123,7 @@ class NinjaStopTests(unittest.TestCase):
             work=Path(temp)
             command='"'+sys.executable.replace('\\','/')+'" -c "raise SystemExit(7)"'
             (work/'build.ninja').write_text('rule fail\n  command = '+command+'\nbuild fail: fail\n')
-            with self.assertRaises(RuntimeError):sliced.run_ninja(['ninja'],work,work/'log.txt',5)
+            with self.assertRaises(RuntimeError):sliced.run_ninja([NINJA],work,work/'log.txt',5)
             self.assertEqual(json.loads((work/'log.json').read_text())['status'],'failed')
 
     def test_soft_stop_removes_unfinished_output_then_resumes(self):
@@ -130,11 +133,11 @@ class NinjaStopTests(unittest.TestCase):
                                         "time.sleep(0 if pathlib.Path('resume').exists() else 60)\np.write_text('complete')\n")
             command='"'+sys.executable.replace('\\','/')+'" build.py'
             (work/'build.ninja').write_text('rule slow\n  command = '+command+'\nbuild partial.out: slow build.py\n')
-            result=sliced.run_ninja(['ninja'],work,work/'log.txt',1,grace=10)
+            result=sliced.run_ninja([NINJA],work,work/'log.txt',1,grace=10)
             self.assertEqual(result['status'],'checkpoint')
             self.assertFalse((work/'partial.out').exists(), 'Ninja must remove incomplete output')
             (work/'resume').touch()
-            result=sliced.run_ninja(['ninja'],work,work/'next.txt',5)
+            result=sliced.run_ninja([NINJA],work,work/'next.txt',5)
             self.assertEqual(result['status'],'complete')
             self.assertEqual((work/'partial.out').read_text(),'complete')
 

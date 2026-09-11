@@ -71,6 +71,7 @@ def run_ninja(command: list[str | Path], cwd: Path, logfile: Path,
                 if 'interrupted by user' in text and 'FAILED:' not in text:
                     status['status'] = 'checkpoint'
             logfile.with_suffix('.json').write_text(json.dumps(status, indent=2)+'\n')
+    print(json.dumps(status, sort_keys=True), flush=True)
     if status['status'] == 'failed':
         raise RuntimeError('Ninja failed or could not stop cleanly; no usable checkpoint: '+str(logfile))
     return status
