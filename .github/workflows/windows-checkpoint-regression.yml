@@ -1,0 +1,76 @@
+name: Native checkpoint handoff (not a CEF engine build)
+on:
+  workflow_call:
+  push:
+    branches: [static-engine, vcpkg]
+    paths:
+      - 'vcpkg/static/checkpoint*.py'
+      - 'vcpkg/static/windows_slice.py'
+      - 'vcpkg/ports/cef-static/tests/test_checkpoint.py'
+      - '.github/workflows/windows-checkpoint-regression.yml'
+  pull_request:
+    branches: [static-engine, vcpkg]
+permissions:
+  contents: read
+jobs:
+  produce:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Activate native Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH|VSINSTALLDIR|VCINSTALLDIR|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion|VSCMD_[^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+      - name: Exercise real Ninja clean interruption and checkpoint safeguards
+        run: python -m unittest discover -s vcpkg/ports/cef-static/tests -p test_checkpoint.py -v
+      - name: Compile only first native object and snapshot exact workspace
+        run: python vcpkg/static/checkpoint_probe.py produce
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-checkpoint-${{ matrix.os }}
+          path: checkpoint-probe-artifact/
+          retention-days: 3
+          if-no-files-found: error
+  consume:
+    needs: produce
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Activate native Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH|VSINSTALLDIR|VCINSTALLDIR|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion|VSCMD_[^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: native-checkpoint-${{ matrix.os }}
+          path: checkpoint-probe-artifact/
+      - name: Finish native link on fresh runner, verify reuse and header invalidation
+        run: python vcpkg/static/checkpoint_probe.py consume
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: checkpoint-handoff-proof-${{ matrix.os }}
+          path: checkpoint-probe-result.json
+          retention-days: 14
+          if-no-files-found: error

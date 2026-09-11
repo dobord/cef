@@ -1,4 +1,4 @@
-name: Static CEF engine via vcpkg
+name: Static CEF iterations and verified vcpkg SDK
 on:
   push:
     branches: [static-engine, vcpkg]
@@ -12,10 +12,12 @@ on:
       - 'vcpkg/ports/cef-static/**'
       - 'vcpkg/static/**'
       - '.github/workflows/static-engine-build.yml'
+  workflow_dispatch:
   release:
     types: [published]
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: static-engine-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
@@ -32,10 +34,13 @@ jobs:
           persist-credentials: false
       - run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
       - run: python -m compileall -q vcpkg/ports/cef-static vcpkg/static
+  checkpoint-preflight:
+    needs: contract
+    uses: ./.github/workflows/windows-checkpoint-regression.yml
   source-build:
     # Do not execute pull-request code on persistent/self-hosted machines.
     if: github.event_name != 'pull_request'
-    needs: contract
+    needs: [contract, checkpoint-preflight]
     concurrency:
       group: cef-static-workspace-${{ matrix.triplet }}
       cancel-in-progress: false
@@ -53,6 +58,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(vars.CEF_STATIC_JOB_TIMEOUT_MINUTES || '350') }}
     env:
       CEF_STATIC_WORK: ${{ matrix.work_root }}
+      CEF_WINDOWS_SLICE_SECONDS: ${{ vars.CEF_WINDOWS_SLICE_SECONDS || '10800' }}
       CEF_STATIC_BUILD_TIMEOUT_SECONDS: ${{ vars.CEF_STATIC_BUILD_TIMEOUT_SECONDS || '18000' }}
       CEF_STATIC_JOBS: ${{ vars.CEF_STATIC_JOBS || '4' }}
       CCACHE_DIR: ${{ github.workspace }}/.cef-ccache
@@ -80,6 +86,12 @@ jobs:
             cef-static-152-linux-
       - name: Test native launchers in actual vcpkg scope before source checkout
         run: python vcpkg/static/toolcheck.py --triplet ${{ matrix.triplet }}
+      - name: Restore compatible Windows source and Ninja checkpoint
+        id: checkpoint
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python vcpkg/static/checkpoint.py restore
       - name: Resolve and verify the complete pinned source trees
         run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}" --logs static-diagnostics/bootstrap
       - name: Install official Chromium Linux build prerequisites
@@ -98,7 +110,22 @@ jobs:
       # The native reference executable depends on all regression objects.
       # Building them separately traversed almost the entire engine graph and
       # timed out after one hour before this stage was reached (run 34505690797).
-      - name: Build the complete engine through vcpkg and verify an external relocated SDK consumer
+      - name: Bounded Windows compilation (checkpoint is not an SDK)
+        id: iteration
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted'
+        run: python vcpkg/static/windows_slice.py
+      - name: Persist Windows progress before validation or runner shutdown
+        if: steps.iteration.outputs.checkpoint_ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.checkpoint.outputs.artifact_name }}
+          path: windows-checkpoint/
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+      - name: Build through vcpkg and verify native and relocated SDK consumers
+        id: package
+        if: runner.os != 'Windows' || runner.environment != 'github-hosted' || steps.iteration.outputs.ready == 'true'
         run: python vcpkg/static/ci.py --triplet ${{ matrix.triplet }}
       - name: Compiler cache statistics
         if: always() && runner.os == 'Linux'
@@ -118,16 +145,40 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Preserve SDK only after successful source and external-consumer tests
-        if: success()
+        if: success() && steps.package.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cef-static-${{ matrix.triplet }}
           path: static-artifacts/
           if-no-files-found: error
           retention-days: 7
-  publish:
-    if: github.event_name == 'release'
+  sdk-readiness:
     needs: source-build
+    runs-on: ubuntu-24.04
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Distinguish a checkpoint iteration from two validated SDKs
+        id: check
+        shell: python
+        run: |
+          import json, os, subprocess
+          result = subprocess.check_output(['gh', 'api',
+              'repos/'+os.environ['GH_REPO']+'/actions/runs/'+os.environ['RUN_ID']+'/artifacts?per_page=100'], text=True)
+          names = {a['name'] for a in json.loads(result)['artifacts'] if not a['expired']}
+          ready = {'cef-static-x64-linux', 'cef-static-x64-windows-static'} <= names
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('ready='+str(ready).lower()+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Both tested SDKs are available.\n' if ready else
+                  '**No complete Windows/Linux SDK pair yet.** A checkpoint is not a release.\n')
+  publish:
+    if: github.event_name == 'release' && needs.sdk-readiness.outputs.ready == 'true'
+    needs: [source-build, sdk-readiness]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
