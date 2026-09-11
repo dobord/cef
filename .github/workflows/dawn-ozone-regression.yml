@@ -1,0 +1,57 @@
+name: Dawn Ozone dependency regression (not an engine build)
+on:
+  push:
+    branches: [static-engine, vcpkg]
+    paths:
+      - 'vcpkg/ports/cef-static/patch_source.py'
+      - 'vcpkg/ports/cef-static/tests/test_dawn_ozone_dependencies.py'
+      - '.github/workflows/dawn-ozone-regression.yml'
+  pull_request:
+    branches: [static-engine, vcpkg]
+    paths:
+      - 'vcpkg/ports/cef-static/patch_source.py'
+      - 'vcpkg/ports/cef-static/tests/test_dawn_ozone_dependencies.py'
+      - '.github/workflows/dawn-ozone-regression.yml'
+permissions:
+  contents: read
+jobs:
+  pinned-gn-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install native GN for the isolated dependency graph test
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y generate-ninja
+          gn --version
+      - name: Retrieve the exact failing upstream GPU target
+        shell: python
+        run: |
+          import hashlib, pathlib, urllib.request
+          url = 'https://raw.githubusercontent.com/chromium/chromium/79460ebecaa5625e57a5fb679a735659e73dc687/gpu/command_buffer/service/BUILD.gn'
+          with urllib.request.urlopen(url, timeout=120) as response:
+              data = response.read()
+          actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          if actual != '09245d2dddb74a8a3817f8490146e42617e6ec44':
+              raise RuntimeError('Pinned upstream Git blob mismatch')
+          pathlib.Path('dawn-evidence').mkdir()
+          pathlib.Path('dawn-evidence/upstream-BUILD.gn').write_bytes(data)
+      - name: Verify the patch against upstream and evaluate native GN feature matrix
+        shell: bash
+        env:
+          CEF_PINNED_GPU_BUILD: dawn-evidence/upstream-BUILD.gn
+          CEF_DAWN_GN_EVIDENCE: dawn-evidence/gn-regression.json
+        run: |
+          python -m unittest discover -s vcpkg/ports/cef-static/tests -p test_dawn_ozone_dependencies.py -v 2>&1 | tee dawn-evidence/tests.log
+          test -s dawn-evidence/gn-regression.json
+      - name: Preserve focused regression evidence, not a CEF SDK
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dawn-ozone-regression
+          path: dawn-evidence/
+          retention-days: 14
+          if-no-files-found: error

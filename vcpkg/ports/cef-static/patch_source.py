@@ -48,8 +48,40 @@ def patch_vulkan_disabled(root: Path) -> None:
             '                               device_queue,')
 
 
+def patch_dawn_ozone_dependencies(root: Path) -> None:
+    # Run 34565392341: Dawn/Ozone is built with use_dawn && use_ozone even
+    # when Chromium's enable_vulkan=false. It still includes sync/sync.h and
+    # vulkan/vulkan.h and calls sync_merge and DRM format helpers. Upstream
+    # only supplies those dependencies in the separate enable_vulkan branch.
+    # Keep Dawn enabled and depend on the bundled source_set, not a system
+    # libsync package or a Vulkan loader shared library.
+    replace(root, 'gpu/command_buffer/service/BUILD.gn',
+            '''    if (use_ozone) {
+      sources += [
+        "shared_image/dawn_ozone_image_representation.cc",
+        "shared_image/dawn_ozone_image_representation.h",
+      ]
+    }
+''',
+            '''    if (use_ozone) {
+      sources += [
+        "shared_image/dawn_ozone_image_representation.cc",
+        "shared_image/dawn_ozone_image_representation.h",
+      ]
+      if ((is_linux || is_chromeos) && !enable_vulkan) {
+        deps += [
+          "//third_party/libsync",
+          "//third_party/vulkan-headers/src:vulkan_headers",
+          "//ui/gfx/linux:drm",
+        ]
+      }
+    }
+''')
+
+
 def patch(root: Path) -> None:
     patch_vulkan_disabled(root)
+    patch_dawn_ozone_dependencies(root)
     replace(root, 'cef/libcef/features/features.gni', '  enable_cef = true\n',
             '  enable_cef = true\n\n  # Build an engine archive, without the DLL-wrapper ABI boundary.\n  cef_static_engine = false\n')
     replace(root, 'cef/include/internal/cef_export.h', '#if defined(COMPILER_MSVC)\n',
