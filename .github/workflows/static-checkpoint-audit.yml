@@ -1,0 +1,26 @@
+name: Static checkpoint integration audit
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/static-checkpoint-audit.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Preserve exact source tree for integration tests
+        run: |
+          mkdir snapshot
+          git archive --format=tar HEAD | gzip > snapshot/source.tar.gz
+          git rev-parse HEAD > snapshot/commit.txt
+          git rev-parse 'HEAD^{tree}' > snapshot/tree.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: static-checkpoint-source
+          path: snapshot/
+          retention-days: 3
