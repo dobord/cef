@@ -34,19 +34,23 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('phase',choices=['produce','consume']);args=parser.parse_args()
     work=Path(os.environ['RUNNER_TEMP'])/'cef-checkpoint-probe'
     package=Path('checkpoint-probe-artifact').resolve()
-    identity={'recipe':'native-archive-fixture-v2-links','work':str(work.resolve()),
+    identity={'recipe':'native-archive-fixture-v3-link-times','work':str(work.resolve()),
               'image':os.environ.get('ImageVersion'), 'os':os.name}
     if args.phase=='produce':
         work.mkdir()
         (work/'value.h').write_text('#define RESULT 42\nint value(void);\n')
-        os.symlink('value.h', work/'value-link.h')
+        # Keep a normal header dependency plus an alias dependency. Older
+        # native Windows Ninja stats a symlink rather than following its target.
+        # Alias-clock preservation and normal-header invalidation are distinct checks.
+        (work/'alias-target.h').write_text('#define CHECKPOINT_BIAS 0\n')
+        os.symlink('alias-target.h', work/'value-link.h')
         (work/'depot_tools').mkdir()
         (work/'depot_tools/cros').write_text('native fixture, not depot_tools\n')
         os.symlink('cros', work/'depot_tools/cros_sdk')
         secret = work/next(iter(cp.OMITTED_FILES))
         secret.parent.mkdir(parents=True)
         secret.write_text('SYNTHETIC-CREDENTIAL-NOT-FOR-ARCHIVE\n')
-        (work/'first.c').write_text('#include "value-link.h"\nint value(void) { return RESULT; }\n')
+        (work/'first.c').write_text('#include "value.h"\n#include "value-link.h"\nint value(void) { return RESULT + CHECKPOINT_BIAS; }\n')
         (work/'main.c').write_text('#include <stdio.h>\n#include "value.h"\nint main(void){ printf("%d\\n",value());return 0;}\n')
         (work/'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.24)\n'
             'project(checkpoint_probe C)\nadd_library(first STATIC first.c)\n'
@@ -54,7 +58,9 @@ def main():
         run(['cmake','-S',work,'-B',work/'build','-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_MAKE_PROGRAM='+native_ninja()])
         run(['cmake','--build',work/'build','--target','first'])
         obj=next((work/'build/CMakeFiles/first.dir').glob('*.obj' if os.name=='nt' else '*.o'))
-        descriptor={'object':obj.relative_to(work).as_posix(),'mtime_ns':obj.stat().st_mtime_ns,'sha256':cp.digest(obj)}
+        descriptor={'object':obj.relative_to(work).as_posix(),'mtime_ns':obj.stat().st_mtime_ns,'sha256':cp.digest(obj),
+                    'link_mtime_ns':(work/'value-link.h').lstat().st_mtime_ns,
+                    'target_mtime_ns':(work/'alias-target.h').stat().st_mtime_ns}
         (work/'fixture.json').write_text(json.dumps(descriptor))
         result=cp.save(work,package,identity,limit=32768)
         print(json.dumps({'fixture_checkpoint_files':result['files'],'engine_verified':False}),flush=True)
@@ -67,6 +73,10 @@ def main():
         descriptor=json.loads((work/'fixture.json').read_text());obj=work/descriptor['object']
         if obj.stat().st_mtime_ns!=descriptor['mtime_ns'] or cp.digest(obj)!=descriptor['sha256']:
             raise RuntimeError('Object changed during handoff')
+        if ((work/'value-link.h').lstat().st_mtime_ns != descriptor['link_mtime_ns'] or
+                (work/'alias-target.h').stat().st_mtime_ns != descriptor['target_mtime_ns']):
+            raise RuntimeError('Symlink or target header clock changed during handoff')
+        run([native_ninja(), '-C', work/'build', '-d', 'explain', '-n', 'probe'])
         run(['cmake','--build',work/'build','--target','probe'])
         exe=work/'build'/('probe.exe' if os.name=='nt' else 'probe')
         actual=subprocess.check_output([str(exe)],text=True).strip()
@@ -79,7 +89,7 @@ def main():
             raise RuntimeError('Restored dependency tracking did not rebuild the changed header')
         evidence={'native_fixture':True,'fresh_runner_object_reuse':True,
                   'changed_header_recompiled':True,'internal_symlinks_restored':True,
-                  'telemetry_credentials_omitted':True,'engine_build_verified':False}
+                  'telemetry_credentials_omitted':True,'symlink_timestamps_preserved':True,'engine_build_verified':False}
         Path('checkpoint-probe-result.json').write_text(json.dumps(evidence,indent=2)+'\n')
         print('NATIVE_CHECKPOINT_HANDOFF_VERIFIED; NOT_A_CEF_BUILD',flush=True)
 

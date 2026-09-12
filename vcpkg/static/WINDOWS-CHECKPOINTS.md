@@ -32,7 +32,7 @@ repository, branch, event and workflow path are checked. No tokens are included;
 credential-bearing Git configs, escaping links and unsupported junctions are rejected.
 Relative symlinks inside the workspace are recorded separately and recreated
 only after regular files have been extracted; they are never followed while
-archiving. Empty directories are retained. Schema 2 rejects older checkpoints.
+archiving. Empty directories are retained. Schema 3 rejects older checkpoints and preserves symlink mtimes as well as regular-file mtimes.
 The Telemetry benchmark-only credentials.json path is omitted without reading
 its contents; arbitrary credential files remain errors.
 
@@ -87,9 +87,16 @@ link/run and vcpkg packaging must still finish before claiming a static CEF SDK.
 The exact job log for run 34593997225/job 103329207292 shows the snapshot
 failed on the relative depot_tools/cros_sdk symlink. The earlier summary that
 attributed this particular failure to credentials.json was incorrect. The
-schema-2 round-trip regression now includes the cros_sdk -> cros layout and a
+schema-3 round-trip regression now includes the cros_sdk -> cros layout and a
 symlinked C header used by the native compiler. Escaping/cyclic links and
 junctions remain rejected. A preflight scan runs before the Windows Ninja slice,
 so unsupported workspace entries are detected before hours of compilation.
 Full Chromium-size checkpoint transfer and static SDK success still require the
 main CI run; small native checkpoint regressions do not certify an engine build.
+
+The Windows cross-runner fixture also preserves the symlink last-write time.
+A newly created link with a new timestamp can otherwise invalidate a completed
+object even when the target header timestamp was restored. Windows timestamps
+are set through a link handle (OPEN_REPARSE_POINT), never through its target.
+The native consumer requires unchanged object, target and symlink clocks before
+finishing the link; a rebuild is a test failure, not accepted cache reuse.

@@ -125,7 +125,7 @@ class CheckpointLinksTests(unittest.TestCase):
     def test_malicious_link_manifest_rejected_without_escape(self):
         result = cp.save(self.work, self.snapshot, IDENTITY)
         shutil.rmtree(self.work)
-        result['links'] = [{'name': 'outside', 'target': '../escaped', 'directory': True}]
+        result['links'] = [{'name': 'outside', 'target': '../escaped', 'directory': True, 'mtime_ns': 1712345678123456700}]
         (self.snapshot/'checkpoint.json').write_text(json.dumps(result))
         with self.assertRaises(ValueError): cp.restore(self.snapshot, self.work, IDENTITY)
         self.assertFalse((self.root/'escaped').exists())
@@ -134,7 +134,7 @@ class CheckpointLinksTests(unittest.TestCase):
     def test_directory_link_cannot_redirect_file_writes(self):
         result = cp.save(self.work, self.snapshot, IDENTITY)
         shutil.rmtree(self.work)
-        result['links'] = [{'name': 'depot_tools', 'target': '.', 'directory': True}]
+        result['links'] = [{'name': 'depot_tools', 'target': '.', 'directory': True, 'mtime_ns': 1712345678123456700}]
         (self.snapshot/'checkpoint.json').write_text(json.dumps(result))
         with self.assertRaises(ValueError): cp.restore(self.snapshot, self.work, IDENTITY)
         self.assertFalse(self.work.exists())
@@ -145,6 +145,30 @@ class CheckpointLinksTests(unittest.TestCase):
         result['omitted_files'] = ['out/important.obj']
         (self.snapshot/'checkpoint.json').write_text(json.dumps(result))
         with self.assertRaises(ValueError): cp.restore(self.snapshot, self.work, IDENTITY)
+
+    def test_link_clock_restored_without_changing_target_clock(self):
+        link = self.work/'depot_tools/cros_sdk'
+        os.symlink('cros', link)
+        target_time = 1712345678123456700
+        link_time = target_time + 1000000000
+        os.utime(self.file, ns=(target_time, target_time))
+        cp.set_link_mtime(link, link_time)
+        self.assertEqual(self.file.stat().st_mtime_ns, target_time)
+        result = self.save_restore()
+        self.assertEqual(result['links'][0]['mtime_ns'], link_time)
+        self.assertEqual(link.lstat().st_mtime_ns, link_time)
+        self.assertEqual(self.file.stat().st_mtime_ns, target_time)
+
+    def test_missing_or_invalid_link_clock_is_rejected(self):
+        os.symlink('cros', self.work/'depot_tools/cros_sdk')
+        result = cp.save(self.work, self.snapshot, IDENTITY)
+        shutil.rmtree(self.work)
+        for value in (None, True, '123', -1, 2**63):
+            with self.subTest(value=value):
+                result['links'][0]['mtime_ns'] = value
+                (self.snapshot/'checkpoint.json').write_text(json.dumps(result))
+                with self.assertRaises(ValueError): cp.restore(self.snapshot, self.work, IDENTITY)
+                self.assertFalse(self.work.exists())
 
     def test_windows_and_posix_escape_targets_rejected(self):
         for target in ('/tmp/x', 'C:/x', 'C:x', r'\\server\share', '../../x', '\x00x'):

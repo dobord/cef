@@ -20,7 +20,7 @@ import subprocess
 import tarfile
 import tempfile
 
-SCHEMA = 2
+SCHEMA = 3
 CHUNK = 1024 * 1024
 PART_BYTES = 1024**3
 ROOT = Path(__file__).resolve().parents[2]
@@ -107,6 +107,7 @@ def inspect_entry(path: Path, work: Path) -> tuple[str, dict | None]:
         if resolved.name.casefold() in SECRET_NAMES:
             raise ValueError('Credential link must not be archived: ' + name)
         return 'link', {'name': name, 'target': target,
+                        'mtime_ns': path.lstat().st_mtime_ns,
                         'directory': bool(getattr(path.lstat(), 'st_file_attributes', 0) & 0x10)
                                      or resolved.is_dir()}
     if path.is_dir():
@@ -116,6 +117,44 @@ def inspect_entry(path: Path, work: Path) -> tuple[str, dict | None]:
         if re.search(r'https?://[^/\s]+@|extraheader\s*=', config, re.I):
             raise ValueError('Credential-bearing Git config cannot be checkpointed')
     return 'file', None
+
+
+def set_link_mtime(path: Path, timestamp: int) -> None:
+    """Restore the link's clock, never its target (Windows Ninja may stat links)."""
+    if type(timestamp) is not int or not 0 <= timestamp < 2**63 or not path.is_symlink():
+        raise ValueError('Invalid checkpoint symlink timestamp')
+    if os.name == 'nt':
+        # CPython 3.12 os.utime cannot open a Windows link without following it.
+        # OPEN_REPARSE_POINT selects the link; BACKUP_SEMANTICS supports dirs.
+        import ctypes
+        from ctypes import wintypes
+        if timestamp % 100:
+            raise ValueError('NTFS cannot preserve sub-100ns link timestamps')
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                           wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        create.restype = wintypes.HANDLE
+        set_time = kernel.SetFileTime
+        set_time.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                            ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
+        set_time.restype = wintypes.BOOL
+        close = kernel.CloseHandle
+        close.argtypes = [wintypes.HANDLE]; close.restype = wintypes.BOOL
+        handle = create(str(path), 0x100, 7, None, 3, 0x02200000, None)
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            ticks = timestamp // 100 + 116444736000000000
+            value = wintypes.FILETIME(ticks & 0xffffffff, ticks >> 32)
+            if not set_time(handle, None, None, ctypes.byref(value)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            close(handle)
+    else:
+        os.utime(path, ns=(timestamp, timestamp), follow_symlinks=False)
+    if path.lstat().st_mtime_ns != timestamp:
+        raise ValueError('Filesystem cannot preserve checkpoint symlink timestamp')
 
 
 def preflight(work: Path) -> dict:
@@ -270,7 +309,8 @@ def restore(package: Path, work: Path, identity: dict) -> dict:
     link_names = set()
     for link in links:
         if (not isinstance(link, dict) or not isinstance(link.get('name'), str) or
-                not isinstance(link.get('target'), str) or type(link.get('directory')) is not bool):
+                not isinstance(link.get('target'), str) or type(link.get('directory')) is not bool or
+                type(link.get('mtime_ns')) is not int or not 0 <= link['mtime_ns'] < 2**63):
             raise ValueError('Invalid checkpoint link metadata')
         name = relative(link['name'])
         if (name.casefold() in link_names or name in OMITTED_FILES or
@@ -336,6 +376,7 @@ def restore(package: Path, work: Path, identity: dict) -> dict:
             # manifest intentionally stores forward slashes.
             os.symlink(str(Path(link_target(link['name'], link['target']))), path,
                        target_is_directory=link['directory'])
+            set_link_mtime(path, link['mtime_ns'])
         for link in links:
             path = stage / link['name']
             try:
