@@ -18,9 +18,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence
-          gh api repos/dobord/cef/actions/jobs/103329207292/logs > windows-job.log
+          gh api --allow-escape-sequences repos/dobord/cef/actions/jobs/103329207292/logs > windows-job.log
           tail -n 85 windows-job.log > evidence/windows-tail.log
-          gh api repos/dobord/cef/actions/jobs/103329207267/logs > linux-job.log
+          gh api --allow-escape-sequences repos/dobord/cef/actions/jobs/103329207267/logs > linux-job.log
           grep -A 9 -B 4 -m 1 "unused variable 'filter_set'" linux-job.log > evidence/linux-error.log
           curl --fail --retry 2 -L https://raw.githubusercontent.com/chromium/chromium/79460ebecaa5625e57a5fb679a735659e73dc687/gpu/ipc/service/gpu_init.cc -o evidence/gpu_init.cc
           test "$(git hash-object evidence/gpu_init.cc)" = 09780f226ffe3794550e40cc6c692167b5c0ca00
