@@ -6,12 +6,14 @@ on:
       - 'vcpkg/ports/cef-static/**'
       - 'vcpkg/static/**'
       - '.github/workflows/static-engine-build.yml'
+      - '.github/workflows/linux-checkpoint-regression.yml'
   pull_request:
     branches: [static-engine, vcpkg]
     paths:
       - 'vcpkg/ports/cef-static/**'
       - 'vcpkg/static/**'
       - '.github/workflows/static-engine-build.yml'
+      - '.github/workflows/linux-checkpoint-regression.yml'
   workflow_dispatch:
   release:
     types: [published]
@@ -52,14 +54,20 @@ jobs:
       - run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
         env:
           CEF_PINNED_GPU_INIT: ${{ runner.temp }}/cef-gpu-init.cc
+      - name: Test Linux iteration and archive contracts
+        if: runner.os == 'Linux'
+        run: python -m unittest discover -s vcpkg/static/tests -v
       - run: python -m compileall -q vcpkg/ports/cef-static vcpkg/static
   checkpoint-preflight:
     needs: contract
     uses: ./.github/workflows/windows-checkpoint-regression.yml
+  linux-checkpoint-preflight:
+    needs: contract
+    uses: ./.github/workflows/linux-checkpoint-regression.yml
   source-build:
     # Do not execute pull-request code on persistent/self-hosted machines.
     if: github.event_name != 'pull_request'
-    needs: [contract, checkpoint-preflight]
+    needs: [contract, checkpoint-preflight, linux-checkpoint-preflight]
     concurrency:
       group: cef-static-workspace-${{ matrix.triplet }}
       cancel-in-progress: false
@@ -77,6 +85,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(vars.CEF_STATIC_JOB_TIMEOUT_MINUTES || '350') }}
     env:
       CEF_STATIC_WORK: ${{ matrix.work_root }}
+      CEF_LINUX_SLICE_SECONDS: ${{ vars.CEF_LINUX_SLICE_SECONDS || '10800' }}
       CEF_WINDOWS_SLICE_SECONDS: ${{ vars.CEF_WINDOWS_SLICE_SECONDS || '10800' }}
       CEF_STATIC_BUILD_TIMEOUT_SECONDS: ${{ vars.CEF_STATIC_BUILD_TIMEOUT_SECONDS || '18000' }}
       CEF_STATIC_JOBS: ${{ vars.CEF_STATIC_JOBS || '4' }}
@@ -111,6 +120,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python vcpkg/static/checkpoint.py restore
+      - name: Restore compatible Ubuntu source and Ninja checkpoint
+        id: linux_checkpoint
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python vcpkg/static/linux_checkpoint.py restore
       - name: Resolve and verify the complete pinned source trees
         run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}" --logs static-diagnostics/bootstrap
       - name: Install official Chromium Linux build prerequisites
@@ -142,9 +157,22 @@ jobs:
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
+      - name: Bounded Ubuntu compilation (checkpoint is not an SDK)
+        id: linux_iteration
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+        run: python vcpkg/static/linux_slice.py
+      - name: Persist Ubuntu progress before validation or runner shutdown
+        if: steps.linux_iteration.outputs.checkpoint_ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.linux_checkpoint.outputs.artifact_name }}
+          path: linux-checkpoint/
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
       - name: Build through vcpkg and verify native and relocated SDK consumers
         id: package
-        if: runner.os != 'Windows' || runner.environment != 'github-hosted' || steps.iteration.outputs.ready == 'true'
+        if: runner.environment != 'github-hosted' || (runner.os == 'Windows' && steps.iteration.outputs.ready == 'true') || (runner.os == 'Linux' && steps.linux_iteration.outputs.ready == 'true')
         run: python vcpkg/static/ci.py --triplet ${{ matrix.triplet }}
       - name: Compiler cache statistics
         if: always() && runner.os == 'Linux'

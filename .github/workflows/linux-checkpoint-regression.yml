@@ -1,0 +1,45 @@
+name: Linux checkpoint handoff (not a CEF SDK)
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  produce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test Linux archive safety and timed Ninja interruption
+        run: python -m unittest discover -s vcpkg/static/tests -v
+      - name: Compile native fixture and archive POSIX metadata
+        run: python vcpkg/static/linux_checkpoint_probe.py produce
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-native-checkpoint-${{ github.run_attempt }}
+          path: |
+            checkpoint-probe-artifact/
+            linux-posix-fixture/
+          retention-days: 3
+          if-no-files-found: error
+  consume:
+    needs: produce
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: linux-native-checkpoint-${{ github.run_attempt }}
+          path: .
+      - name: Verify fresh-runner reuse, header invalidation and POSIX metadata
+        run: python vcpkg/static/linux_checkpoint_probe.py consume
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-checkpoint-handoff-proof-${{ github.run_attempt }}
+          path: checkpoint-probe-result.json
+          retention-days: 14
+          if-no-files-found: error
