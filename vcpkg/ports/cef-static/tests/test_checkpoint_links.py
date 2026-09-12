@@ -55,9 +55,11 @@ class CheckpointLinksTests(unittest.TestCase):
     def test_internal_directory_link_does_not_duplicate_files(self):
         (self.work/'generated').mkdir()
         (self.work/'generated/value').write_bytes(b'one copy')
-        os.symlink('../generated', self.work/'depot_tools/generated', target_is_directory=True)
+        os.symlink(str(Path('..')/'generated'), self.work/'depot_tools/generated', target_is_directory=True)
         result = self.save_restore()
         self.assertEqual(result['files'], 2)
+        self.assertEqual(result['links'][0]['target'], '../generated')
+        self.assertEqual(os.readlink(self.work/'depot_tools/generated'), str(Path('..')/'generated'))
         self.assertEqual((self.work/'depot_tools/generated/value').read_bytes(), b'one copy')
 
     def test_empty_directory_target_survives(self):
@@ -73,7 +75,7 @@ class CheckpointLinksTests(unittest.TestCase):
         self.assertFalse((self.work/'later').exists())
 
     def test_external_relative_link_rejected_before_archive(self):
-        os.symlink('../external', self.work/'outside')
+        os.symlink(str(Path('..')/'external'), self.work/'outside')
         with self.assertRaises(ValueError): cp.preflight(self.work)
         with self.assertRaises(ValueError): cp.save(self.work, self.snapshot, IDENTITY)
         self.assertFalse((self.snapshot/'checkpoint.json').exists())
@@ -87,7 +89,7 @@ class CheckpointLinksTests(unittest.TestCase):
         with self.assertRaises(ValueError): cp.preflight(self.work)
 
     def test_relative_internal_link_chain_roundtrip(self):
-        os.symlink('depot_tools/cros', self.work/'b')
+        os.symlink(str(Path('depot_tools')/'cros'), self.work/'b')
         os.symlink('b', self.work/'a')
         self.save_restore()
         self.assertEqual((self.work/'a').read_bytes(), self.file.read_bytes())

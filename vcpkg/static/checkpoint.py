@@ -332,7 +332,9 @@ def restore(package: Path, work: Path, identity: dict) -> dict:
             if any(parent.is_symlink() for parent in path.parents if parent != stage.parent):
                 raise ValueError('Checkpoint link nested below another link')
             path.parent.mkdir(parents=True, exist_ok=True)
-            os.symlink(link_target(link['name'], link['target']), path,
+            # Win32 symlink targets must use native separators; the portable
+            # manifest intentionally stores forward slashes.
+            os.symlink(str(Path(link_target(link['name'], link['target']))), path,
                        target_is_directory=link['directory'])
         for link in links:
             path = stage / link['name']
