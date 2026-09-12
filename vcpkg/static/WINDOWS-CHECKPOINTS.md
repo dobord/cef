@@ -29,7 +29,12 @@ Identity includes the absolute workspace, repository/ref, Windows runner image
 version and port/driver recipe bytes. Restores never overwrite a nonempty
 workspace. Pull-request workflows cannot supply production checkpoints; producer
 repository, branch, event and workflow path are checked. No tokens are included;
-credential-bearing Git configs and filesystem links/junctions are rejected.
+credential-bearing Git configs, escaping links and unsupported junctions are rejected.
+Relative symlinks inside the workspace are recorded separately and recreated
+only after regular files have been extracted; they are never followed while
+archiving. Empty directories are retained. Schema 2 rejects older checkpoints.
+The Telemetry benchmark-only credentials.json path is omitted without reading
+its contents; arbitrary credential files remain errors.
 
 Snapshots are large and consume artifact storage. Existing repository retention,
 quota and billing settings are **not** changed. Default retention is three days;
@@ -76,3 +81,15 @@ link/run and vcpkg packaging must still finish before claiming a static CEF SDK.
 - Artifact handoff: https://github.com/actions/upload-artifact
 - Ninja cleanup: https://github.com/ninja-build/ninja/blob/master/src/build.cc
 - Ninja Windows interrupts: https://github.com/ninja-build/ninja/blob/master/src/subprocess-win32.cc
+
+## September 12 repair and corrected diagnosis
+
+The exact job log for run 34593997225/job 103329207292 shows the snapshot
+failed on the relative depot_tools/cros_sdk symlink. The earlier summary that
+attributed this particular failure to credentials.json was incorrect. The
+schema-2 round-trip regression now includes the cros_sdk -> cros layout and a
+symlinked C header used by the native compiler. Escaping/cyclic links and
+junctions remain rejected. A preflight scan runs before the Windows Ninja slice,
+so unsupported workspace entries are detected before hours of compilation.
+Full Chromium-size checkpoint transfer and static SDK success still require the
+main CI run; small native checkpoint regressions do not certify an engine build.

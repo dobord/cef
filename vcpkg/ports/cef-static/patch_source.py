@@ -79,9 +79,23 @@ def patch_dawn_ozone_dependencies(root: Path) -> None:
 ''')
 
 
+def patch_gpu_init_filter_set(root: Path) -> None:
+    # filter_set is read by either Vulkan or the ChromeOS Dawn filter. A
+    # Vulkan-disabled non-ChromeOS Ozone build has neither reader. Keep both
+    # original users and their mutual-exclusion check; do not suppress -Werror.
+    replace(root, 'gpu/ipc/service/gpu_init.cc',
+            '  bool filter_set = false;\n#if BUILDFLAG(ENABLE_VULKAN)\n',
+            '#if BUILDFLAG(ENABLE_VULKAN) || '
+            '(BUILDFLAG(SKIA_USE_DAWN) && BUILDFLAG(IS_CHROMEOS))\n'
+            '  bool filter_set = false;\n'
+            '#endif\n'
+            '#if BUILDFLAG(ENABLE_VULKAN)\n')
+
+
 def patch(root: Path) -> None:
     patch_vulkan_disabled(root)
     patch_dawn_ozone_dependencies(root)
+    patch_gpu_init_filter_set(root)
     replace(root, 'cef/libcef/features/features.gni', '  enable_cef = true\n',
             '  enable_cef = true\n\n  # Build an engine archive, without the DLL-wrapper ABI boundary.\n  cef_static_engine = false\n')
     replace(root, 'cef/include/internal/cef_export.h', '#if defined(COMPILER_MSVC)\n',

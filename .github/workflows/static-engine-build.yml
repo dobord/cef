@@ -32,7 +32,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Fetch pinned GPU source for exact-context regression
+        shell: python
+        run: |
+          import hashlib, os, pathlib, time, urllib.request
+          url = 'https://raw.githubusercontent.com/chromium/chromium/79460ebecaa5625e57a5fb679a735659e73dc687/gpu/ipc/service/gpu_init.cc'
+          for attempt in range(3):
+              try:
+                  with urllib.request.urlopen(url, timeout=60) as response:
+                      data = response.read()
+                  break
+              except OSError:
+                  if attempt == 2: raise
+                  time.sleep(3)
+          actual = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+          if actual != '09780f226ffe3794550e40cc6c692167b5c0ca00':
+              raise RuntimeError('Pinned GPU source blob mismatch')
+          (pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-gpu-init.cc').write_bytes(data)
       - run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
+        env:
+          CEF_PINNED_GPU_INIT: ${{ runner.temp }}/cef-gpu-init.cc
       - run: python -m compileall -q vcpkg/ports/cef-static vcpkg/static
   checkpoint-preflight:
     needs: contract

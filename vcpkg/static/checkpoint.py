@@ -12,14 +12,15 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
+import posixpath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import subprocess
 import tarfile
 import tempfile
 
-SCHEMA = 1
+SCHEMA = 2
 CHUNK = 1024 * 1024
 PART_BYTES = 1024**3
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,19 +39,99 @@ def relative(value: str) -> str:
     return value
 
 
-def regular_files(root: Path):
-    """Do not follow junctions/symlinks or accidentally include external data."""
+# Telemetry downloads these benchmark-only credentials separately from Git.
+# Never read or upload their bytes. This is not an allow-list for credentials.
+OMITTED_FILES = frozenset({
+    'download/chromium/src/tools/perf/page_sets/data/credentials.json',
+})
+SECRET_NAMES = frozenset({'credentials.json', '.git-credentials', '.netrc', '.boto'})
+
+
+def link_target(name: str, target: str) -> str:
+    """Validate a relative target lexically; link chains are also checked later."""
+    relative(name)
+    if (not target or any(c in target for c in ('\x00', '\n', '\r')) or
+            PureWindowsPath(target).drive or target.startswith(('/', '\\'))):
+        raise ValueError('Checkpoint refuses absolute or invalid link target: ' + name)
+    normalized = target.replace('\\', '/')
+    destination = posixpath.normpath(posixpath.join(posixpath.dirname(name), normalized))
+    if destination == '..' or destination.startswith('../') or destination.startswith('/'):
+        raise ValueError('Checkpoint link escapes workspace: ' + name)
+    return normalized
+
+
+def workspace_entries(root: Path):
+    """Never traverse links. Preserve internal symlinks separately from file data."""
     for directory, dirs, files in os.walk(root, followlinks=False):
-        for name in sorted(dirs + files):
-            p = Path(directory)/name
-            if p.is_symlink() or (hasattr(p, 'is_junction') and p.is_junction()):
-                raise ValueError(f'Checkpoint refuses links/junctions: {p}')
         dirs.sort()
-        for name in sorted(files):
-            p = Path(directory)/name
-            if not p.is_file():
-                raise ValueError(f'Not a regular checkpoint file: {p}')
-            yield p
+        for name in sorted(dirs + files):
+            p = Path(directory) / name
+            if p.is_symlink():
+                yield p
+            elif ((hasattr(p, 'is_junction') and p.is_junction()) or
+                  getattr(p.lstat(), 'st_file_attributes', 0) & 0x400):
+                raise ValueError('Checkpoint refuses unsupported reparse points: ' + str(p))
+            elif name in files:
+                if not p.is_file():
+                    raise ValueError('Not a regular checkpoint file: ' + str(p))
+                yield p
+            elif p.is_dir():
+                yield p
+
+
+def resolve_link(path: Path) -> Path:
+    # Python 3.13+ non-strict resolve may leave symlink loops unresolved.
+    # Strict resolution rejects loops; only genuinely missing targets may fall
+    # back to lexical resolution (normal for optional platform tools).
+    try:
+        return path.resolve(strict=True)
+    except FileNotFoundError:
+        return path.resolve(strict=False)
+
+
+def inspect_entry(path: Path, work: Path) -> tuple[str, dict | None]:
+    name = relative(path.relative_to(work).as_posix())
+    if name in OMITTED_FILES:
+        return 'omit', None
+    if path.name.casefold() in SECRET_NAMES:
+        raise ValueError('Credentials must not be archived: ' + name)
+    if path.is_symlink():
+        target = link_target(name, os.readlink(path))
+        try:
+            resolved = resolve_link(path)
+        except (RuntimeError, OSError) as error:
+            raise ValueError('Invalid checkpoint link chain: ' + name) from error
+        if not resolved.is_relative_to(work):
+            raise ValueError('Checkpoint link resolves outside workspace: ' + name)
+        # Do not follow credential-bearing links under innocuous filenames.
+        if resolved.name.casefold() in SECRET_NAMES:
+            raise ValueError('Credential link must not be archived: ' + name)
+        return 'link', {'name': name, 'target': target,
+                        'directory': bool(getattr(path.lstat(), 'st_file_attributes', 0) & 0x10)
+                                     or resolved.is_dir()}
+    if path.is_dir():
+        return 'directory', None
+    if path.name == 'config' and path.parent.name == '.git':
+        config = path.read_text(encoding='utf-8', errors='replace')
+        if re.search(r'https?://[^/\s]+@|extraheader\s*=', config, re.I):
+            raise ValueError('Credential-bearing Git config cannot be checkpointed')
+    return 'file', None
+
+
+def preflight(work: Path) -> dict:
+    """Catch unsupported entries before spending hours compiling; save rechecks."""
+    work = work.resolve()
+    counts = {'files': 0, 'links': 0, 'directories': 0, 'omitted_files': []}
+    for path in workspace_entries(work):
+        name = path.relative_to(work).as_posix()
+        if name.split('/')[0].startswith('cef-sdk-test-'):
+            continue
+        kind, _ = inspect_entry(path, work)
+        if kind == 'omit':
+            counts['omitted_files'].append(name)
+        else:
+            counts['directories' if kind == 'directory' else kind + 's'] += 1
+    return counts
 
 
 class SplitWriter:
@@ -123,20 +204,26 @@ def save(work: Path, destination: Path, identity: dict, *, limit: int = PART_BYT
     destination.mkdir(parents=True)
     writer = SplitWriter(destination, limit)
     total, count = 0, 0
+    links, omitted, directories = [], [], []
     try:
         with gzip.GzipFile(fileobj=writer, mode='wb', compresslevel=1, mtime=0) as compressed:
             with tarfile.open(fileobj=compressed, mode='w|', format=tarfile.PAX_FORMAT) as archive:
-                for path in regular_files(work):
+                for path in workspace_entries(work):
                     name = relative(path.relative_to(work).as_posix())
                     # ci.py owns disposable SDK/manager sessions; they are not
                     # inputs of the Chromium/Ninja build and may contain reports.
                     if name.split('/')[0].startswith('cef-sdk-test-'):
                         continue
-                    # Source Git remotes must not embed credentials in artifacts.
-                    if path.name == 'config' and path.parent.name == '.git':
-                        config = path.read_text(encoding='utf-8', errors='replace')
-                        if re.search(r'https?://[^/\s]+@|extraheader\s*=', config, re.I):
-                            raise ValueError('Credential-bearing Git config cannot be checkpointed')
+                    kind, record = inspect_entry(path, work)
+                    if kind == 'omit':
+                        omitted.append(name)
+                        continue
+                    if kind == 'link':
+                        links.append(record)
+                        continue
+                    if kind == 'directory':
+                        directories.append(name)
+                        continue
                     info = archive.gettarinfo(str(path), arcname=name)
                     info.uid = info.gid = 0; info.uname = info.gname = ''
                     # tarfile's float mtime loses sub-microsecond precision,
@@ -150,7 +237,9 @@ def save(work: Path, destination: Path, identity: dict, *, limit: int = PART_BYT
             raise ValueError('Refusing an empty checkpoint')
         manifest = {'schema': SCHEMA, 'kind': 'build-checkpoint-not-sdk',
                     'identity': identity, 'files': count, 'unpacked_bytes': total,
-                    'parts': writer.parts, 'engine_runtime_verified': False}
+                    'parts': writer.parts, 'links': links, 'omitted_files': omitted,
+                    'directories': directories,
+                    'engine_runtime_verified': False}
         (destination/'checkpoint.json').write_text(json.dumps(manifest, indent=2)+'\n', encoding='utf-8')
         return manifest
     except BaseException:
@@ -166,6 +255,31 @@ def restore(package: Path, work: Path, identity: dict) -> dict:
     if (manifest.get('schema') != SCHEMA or manifest.get('kind') != 'build-checkpoint-not-sdk'
             or manifest.get('identity') != identity or manifest.get('engine_runtime_verified') is not False):
         raise ValueError('Checkpoint identity/schema mismatch; refusing reuse')
+    links, omitted = manifest.get('links'), manifest.get('omitted_files')
+    if not isinstance(links, list) or not isinstance(omitted, list):
+        raise ValueError('Checkpoint link/exclusion manifest is missing')
+    if any(not isinstance(n, str) or n not in OMITTED_FILES for n in omitted):
+        raise ValueError('Unreviewed checkpoint exclusion')
+    directories = manifest.get('directories')
+    if (not isinstance(directories, list) or any(not isinstance(n, str) for n in directories) or
+            len(set(n.casefold() for n in directories)) != len(directories)):
+        raise ValueError('Invalid checkpoint directories')
+    for name in directories:
+        relative(name)
+    directory_names = {n.casefold() for n in directories}
+    link_names = set()
+    for link in links:
+        if (not isinstance(link, dict) or not isinstance(link.get('name'), str) or
+                not isinstance(link.get('target'), str) or type(link.get('directory')) is not bool):
+            raise ValueError('Invalid checkpoint link metadata')
+        name = relative(link['name'])
+        if (name.casefold() in link_names or name in OMITTED_FILES or
+                name.casefold() in directory_names):
+            raise ValueError('Duplicate or excluded checkpoint link')
+        if PurePosixPath(name).name.casefold() in SECRET_NAMES:
+            raise ValueError('Credentials must not be restored')
+        link_names.add(name.casefold())
+        link_target(name, link['target'])
     if work.exists() and any(work.iterdir()):
         raise ValueError('Refusing to overwrite an existing source workspace')
     parts = manifest.get('parts')
@@ -186,12 +300,17 @@ def restore(package: Path, work: Path, identity: dict) -> dict:
     stage = Path(tempfile.mkdtemp(prefix='cef-restore-', dir=work.parent))
     seen, total = set(), 0
     try:
+        for name in directories:
+            (stage/name).mkdir(parents=True, exist_ok=True)
         with PartsReader(package, parts) as raw, io.BufferedReader(raw) as stream:
             with tarfile.open(fileobj=stream, mode='r|gz') as archive:
                 for member in archive:
                     name = relative(member.name)
-                    if not member.isfile() or name.casefold() in seen:
+                    if (not member.isfile() or name.casefold() in seen or
+                            name.casefold() in link_names):
                         raise ValueError('Links, special files or duplicate paths in checkpoint')
+                    if name in OMITTED_FILES or PurePosixPath(name).name.casefold() in SECRET_NAMES:
+                        raise ValueError('Credentials must not be restored')
                     seen.add(name.casefold()); total += member.size
                     if total > manifest['unpacked_bytes'] or len(seen) > manifest['files']:
                         raise ValueError('Archive exceeds declared size')
@@ -206,6 +325,25 @@ def restore(package: Path, work: Path, identity: dict) -> dict:
                     os.chmod(path, member.mode & 0o777)
         if total != manifest['unpacked_bytes'] or len(seen) != manifest['files']:
             raise ValueError('Truncated checkpoint')
+        # Materialize symlinks only AFTER all file writes. A symlink in an
+        # archive can therefore never redirect extraction outside the staging dir.
+        for link in links:
+            path = stage / link['name']
+            if any(parent.is_symlink() for parent in path.parents if parent != stage.parent):
+                raise ValueError('Checkpoint link nested below another link')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(link_target(link['name'], link['target']), path,
+                       target_is_directory=link['directory'])
+        for link in links:
+            path = stage / link['name']
+            try:
+                resolved = resolve_link(path)
+            except (RuntimeError, OSError) as error:
+                raise ValueError('Invalid restored link chain') from error
+            if not resolved.is_relative_to(stage):
+                raise ValueError('Restored link chain escapes workspace')
+            if resolved.name.casefold() in SECRET_NAMES:
+                raise ValueError('Credential link must not be restored')
         if work.exists():
             work.rmdir()  # empty only, never remove user data
         stage.rename(work)

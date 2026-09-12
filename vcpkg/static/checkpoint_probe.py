@@ -34,12 +34,19 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('phase',choices=['produce','consume']);args=parser.parse_args()
     work=Path(os.environ['RUNNER_TEMP'])/'cef-checkpoint-probe'
     package=Path('checkpoint-probe-artifact').resolve()
-    identity={'recipe':'native-archive-fixture-v1','work':str(work.resolve()),
+    identity={'recipe':'native-archive-fixture-v2-links','work':str(work.resolve()),
               'image':os.environ.get('ImageVersion'), 'os':os.name}
     if args.phase=='produce':
         work.mkdir()
         (work/'value.h').write_text('#define RESULT 42\nint value(void);\n')
-        (work/'first.c').write_text('#include "value.h"\nint value(void) { return RESULT; }\n')
+        os.symlink('value.h', work/'value-link.h')
+        (work/'depot_tools').mkdir()
+        (work/'depot_tools/cros').write_text('native fixture, not depot_tools\n')
+        os.symlink('cros', work/'depot_tools/cros_sdk')
+        secret = work/next(iter(cp.OMITTED_FILES))
+        secret.parent.mkdir(parents=True)
+        secret.write_text('SYNTHETIC-CREDENTIAL-NOT-FOR-ARCHIVE\n')
+        (work/'first.c').write_text('#include "value-link.h"\nint value(void) { return RESULT; }\n')
         (work/'main.c').write_text('#include <stdio.h>\n#include "value.h"\nint main(void){ printf("%d\\n",value());return 0;}\n')
         (work/'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.24)\n'
             'project(checkpoint_probe C)\nadd_library(first STATIC first.c)\n'
@@ -53,6 +60,10 @@ def main():
         print(json.dumps({'fixture_checkpoint_files':result['files'],'engine_verified':False}),flush=True)
     else:
         cp.restore(package,work,identity)
+        if not (work/'value-link.h').is_symlink() or not (work/'depot_tools/cros_sdk').is_symlink():
+            raise RuntimeError('Internal symlinks lost during checkpoint handoff')
+        if (work/next(iter(cp.OMITTED_FILES))).exists():
+            raise RuntimeError('Telemetry credentials leaked into checkpoint')
         descriptor=json.loads((work/'fixture.json').read_text());obj=work/descriptor['object']
         if obj.stat().st_mtime_ns!=descriptor['mtime_ns'] or cp.digest(obj)!=descriptor['sha256']:
             raise RuntimeError('Object changed during handoff')
@@ -67,7 +78,8 @@ def main():
         if subprocess.check_output([str(exe)],text=True).strip()!='43' or cp.digest(obj)==descriptor['sha256']:
             raise RuntimeError('Restored dependency tracking did not rebuild the changed header')
         evidence={'native_fixture':True,'fresh_runner_object_reuse':True,
-                  'changed_header_recompiled':True,'engine_build_verified':False}
+                  'changed_header_recompiled':True,'internal_symlinks_restored':True,
+                  'telemetry_credentials_omitted':True,'engine_build_verified':False}
         Path('checkpoint-probe-result.json').write_text(json.dumps(evidence,indent=2)+'\n')
         print('NATIVE_CHECKPOINT_HANDOFF_VERIFIED; NOT_A_CEF_BUILD',flush=True)
 

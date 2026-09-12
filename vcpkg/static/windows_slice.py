@@ -86,6 +86,8 @@ def main():
     build.setup_environment(work)
     source = build.prepare(work, diagnostics)
     out = build.configuration(source, diagnostics)
+    audit = checkpoint.preflight(work)
+    (diagnostics/'checkpoint-preflight.json').write_text(json.dumps(audit, indent=2)+'\n')
     seconds = build.positive_env('CEF_WINDOWS_SLICE_SECONDS', 10800, 10800)
     jobs = build.positive_env('CEF_STATIC_JOBS', 4, 1024)
     ninja = build.find_binary(source, ['third_party/ninja/ninja.exe'])
@@ -95,7 +97,8 @@ def main():
     # ci.py still goes through vcpkg and must run both native and SDK consumers.
     package = ROOT/'windows-checkpoint'
     saved = checkpoint.save(work, package, identity)
-    result.update(checkpoint_files=saved['files'], checkpoint_bytes=sum(p['bytes'] for p in saved['parts']))
+    result.update(checkpoint_files=saved['files'], checkpoint_links=len(saved['links']),
+                  checkpoint_omitted_files=saved['omitted_files'], checkpoint_bytes=sum(p['bytes'] for p in saved['parts']))
     (diagnostics/'iteration.json').write_text(json.dumps(result, indent=2)+'\n')
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write('ready='+str(result['status']=='complete').lower()+'\n')
