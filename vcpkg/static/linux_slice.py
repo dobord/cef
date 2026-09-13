@@ -24,7 +24,7 @@ def main() -> None:
     build.setup_environment(work)
     source = build.prepare(work, diagnostics)
     out = build.configuration(source, diagnostics)
-    audit = checkpoint.shared.preflight(work)
+    audit = checkpoint.preflight(work)
     (diagnostics/'checkpoint-preflight.json').write_text(json.dumps(audit, indent=2)+'\n')
     ninja = build.find_binary(source, ['third_party/ninja/ninja'])
     result = run_ninja([ninja, '-C', out, '-j', str(jobs), '-d', 'keeprsp', 'cef_static_smoke'],

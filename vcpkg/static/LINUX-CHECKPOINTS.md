@@ -73,3 +73,24 @@ Primary references:
 - Hosted-job limits: https://docs.github.com/en/actions/reference/limits
 - Artifact semantics: https://github.com/actions/upload-artifact
 - Pinned sysroot relative-link cleanup: https://github.com/chromium/chromium/blob/79460ebecaa5625e57a5fb679a735659e73dc687/build/linux/sysroot_scripts/sysroot_creator.py
+
+## POSIX path validation repair (13 September 2026)
+
+Run `34709030909` failed before Linux compilation because the shared Windows
+preflight rejected the literal backslash in the Debian sysroot filename
+`system-systemd\x2dcryptsetup.slice`. Linux now uses its own `relative`,
+`link_target`, `inspect_entry`, and `preflight` functions for both workspace
+auditing and archive save/restore. Backslashes and colons are literal filename
+characters, never alternate separators. Symlink targets keep their exact
+spelling, including `./` and literal backslashes. Linux policy version is 2;
+shared schema 3 and all Windows recipe inputs remain unchanged.
+
+The validator still rejects absolute member names, NUL, empty/`.`/`..` archive
+components, escaping or cyclic symlinks, special files and credentials. The
+new `test_linux_paths.py` regression suite and two-runner POSIX fixture cover
+sysroot-style names, distinct backslash/slash paths, literal link targets,
+clocks, modes and containment. The iteration tests execute the real Linux
+preflight and explicitly reject any call to the shared Windows preflight.
+
+Windows continuation must still match the existing image, workspace and recipe;
+no identity bypass or fallback to a mismatched checkpoint is introduced.

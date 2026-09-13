@@ -12,6 +12,7 @@ import gzip
 import io
 import json
 import os
+import posixpath
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -21,16 +22,91 @@ import tarfile
 import tempfile
 import checkpoint as shared
 from checkpoint import (CHUNK, SCHEMA, OMITTED_FILES, SECRET_NAMES, PartsReader,
-                        digest, relative, link_target, resolve_link, set_link_mtime,
-                        PART_BYTES, SplitWriter, workspace_entries, inspect_entry)
+                        digest, resolve_link, set_link_mtime,
+                        PART_BYTES, SplitWriter, workspace_entries)
 
 ROOT = Path(__file__).resolve().parents[2]
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 
 
 def require_linux() -> None:
     if sys.platform != 'linux':
         raise ValueError('Linux checkpoints require a native Linux host')
+
+
+def relative(value: str) -> str:
+    """Validate canonical POSIX archive names, preserving literal backslashes.
+
+    Only '/' separates Linux path components; ':' and '\\' are ordinary bytes.
+    Do not reuse/patch the shared Windows policy or change its checkpoint recipe.
+    Validate the original spelling before PurePosixPath can collapse '.' or '//'.
+    """
+    if (not isinstance(value, str) or not value or '\x00' in value or
+            value.startswith('/') or any(p in ('', '.', '..') for p in value.split('/'))):
+        raise ValueError(f'Unsafe Linux checkpoint path: {value!r}')
+    return value
+
+
+def link_target(name: str, target: str) -> str:
+    """Keep POSIX link spelling; check lexical containment and later link chains."""
+    relative(name)
+    if (not isinstance(target, str) or not target or
+            any(c in target for c in ('\x00', '\n', '\r')) or target.startswith('/')):
+        raise ValueError('Checkpoint refuses absolute or invalid link target: ' + name)
+    destination = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+    if destination == '..' or destination.startswith('../') or destination.startswith('/'):
+        raise ValueError('Checkpoint link escapes workspace: ' + name)
+    return target
+
+
+def inspect_entry(path: Path, work: Path) -> tuple[str, dict | None]:
+    """Linux equivalent of shared.inspect_entry, with no Windows normalization.
+
+    Keep credential, link-chain and containment gates in sync with the shared
+    implementation. Both preflight and save must use this exact path policy.
+    """
+    name = relative(path.relative_to(work).as_posix())
+    if name in OMITTED_FILES:
+        return 'omit', None
+    if path.name.casefold() in SECRET_NAMES:
+        raise ValueError('Credentials must not be archived: ' + name)
+    if path.is_symlink():
+        target = link_target(name, os.readlink(path))
+        try:
+            resolved = resolve_link(path)
+        except (RuntimeError, OSError) as error:
+            raise ValueError('Invalid checkpoint link chain: ' + name) from error
+        if not resolved.is_relative_to(work):
+            raise ValueError('Checkpoint link resolves outside workspace: ' + name)
+        if resolved.name.casefold() in SECRET_NAMES:
+            raise ValueError('Credential link must not be archived: ' + name)
+        return 'link', {'name': name, 'target': target,
+                        'mtime_ns': path.lstat().st_mtime_ns,
+                        'directory': resolved.is_dir()}
+    if path.is_dir():
+        return 'directory', None
+    if path.name == 'config' and path.parent.name == '.git':
+        config = path.read_text(encoding='utf-8', errors='replace')
+        if re.search(r'https?://[^/\s]+@|extraheader\s*=', config, re.I):
+            raise ValueError('Credential-bearing Git config cannot be checkpointed')
+    return 'file', None
+
+
+def preflight(work: Path) -> dict:
+    """Audit Linux names before Ninja using the same checks as the archive writer."""
+    require_linux()
+    work = work.resolve()
+    counts = {'files': 0, 'links': 0, 'directories': 0, 'omitted_files': []}
+    for path in workspace_entries(work):
+        name = path.relative_to(work).as_posix()
+        if name.split('/')[0].startswith('cef-sdk-test-'):
+            continue
+        kind, _ = inspect_entry(path, work)
+        if kind == 'omit':
+            counts['omitted_files'].append(name)
+        else:
+            counts['directories' if kind == 'directory' else kind + 's'] += 1
+    return counts
 
 
 def save(work: Path, destination: Path, identity: dict, *, limit: int = PART_BYTES) -> dict:
@@ -175,7 +251,7 @@ def restore(package: Path, work: Path, identity: dict) -> dict:
                 raise ValueError('Checkpoint link nested below another link')
             path.parent.mkdir(parents=True, exist_ok=True)
             # Linux retains the validated relative symlink spelling.
-            os.symlink(str(Path(link_target(link['name'], link['target']))), path,
+            os.symlink(link_target(link['name'], link['target']), path,
                        target_is_directory=link['directory'])
             set_link_mtime(path, link['mtime_ns'])
         for link in links:

@@ -188,6 +188,8 @@ class IterationTests(unittest.TestCase):
     def exercise(self, status, ready, fail_save=False):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); output = root/'output'; summary = root/'summary'
+            work = root/'cef-static'; work.mkdir()
+            (work/r'system-systemd\x2dcryptsetup.slice').write_text('POSIX fixture')
             env = {'RUNNER_TEMP': td, 'CEF_STATIC_WORK': '', 'GITHUB_OUTPUT': str(output),
                    'GITHUB_STEP_SUMMARY': str(summary), 'CEF_LINUX_SLICE_SECONDS': '1', 'CEF_STATIC_JOBS': '1'}
             with patch.dict(os.environ, env), patch.object(sliced, 'ROOT', root), \
@@ -196,7 +198,8 @@ class IterationTests(unittest.TestCase):
                  patch.object(sliced.build, 'prepare', return_value=root/'src'), \
                  patch.object(sliced.build, 'configuration', return_value=root/'out'), \
                  patch.object(sliced.build, 'find_binary', return_value=root/'ninja'), \
-                 patch.object(sliced.checkpoint.shared, 'preflight', return_value={}), \
+                 patch.object(sliced.checkpoint.shared, 'preflight', side_effect=AssertionError('Windows preflight used')), \
+                 patch.object(sliced.checkpoint, 'preflight', wraps=cp.preflight) as preflight, \
                  patch.object(sliced, 'run_ninja', return_value={'status':status,'engine_runtime_verified':False}), \
                  patch.object(sliced.checkpoint, 'save', side_effect=ValueError('archive rejected') if fail_save else None,
                               return_value={'files':1,'links':[],'omitted_files':[],'parts':[{'bytes':5}]}):
@@ -209,6 +212,9 @@ class IterationTests(unittest.TestCase):
                     self.assertIn('checkpoint_ready=true', output.read_text())
                     result=json.loads((root/'static-diagnostics/linux-iteration/iteration.json').read_text())
                     self.assertIs(result['engine_runtime_verified'], False)
+                preflight.assert_called_once_with(work)
+                audit=json.loads((root/'static-diagnostics/linux-iteration/checkpoint-preflight.json').read_text())
+                self.assertEqual(audit['files'], 1)
 
     def test_invalid_budget_stops_before_prepare(self):
         for value in ('0', '10801', 'bad'):
