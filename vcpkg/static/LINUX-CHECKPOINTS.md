@@ -18,8 +18,9 @@ validation. A hard runner timeout cannot guarantee that a checkpoint is saved.
 Ninja receives SIGINT and must exit cleanly, removing incomplete edge outputs.
 A compiler error, forced kill or failed archive is still a failure and cannot
 publish a valid checkpoint or SDK. A clean scheduled interruption creates a
-checkpoint, **not an engine success**. Re-run all jobs at the same commit for the
-next iteration on both platforms; no unbounded automatic rerun chain is created.
+checkpoint, **not an engine success**. Start a NEW workflow run for the next
+iteration; do not use Re-run all jobs on its producer. See
+[CROSS-RUN-CONTINUATION.md](CROSS-RUN-CONTINUATION.md). No automatic chain is created.
 Self-hosted jobs keep the existing persistent-workspace path and full build.
 
 The full dedicated source/depot_tools/Ninja workspace is saved in streaming gzip
@@ -33,10 +34,11 @@ All parts must pass size/SHA-256 checks before extraction. Extraction stages
 regular data first and links last; escape paths, cycles, unsupported filesystem
 entries and credential-bearing files/configs are rejected. The existing narrow
 Telemetry benchmark-credentials omission is retained, never read or uploaded.
-Artifact discovery only accepts the matching repository/branch, producer workflow,
-source SHA and identity, including earlier attempts of the same run. Up to five
-pages of repository artifacts are searched. A mismatch starts fresh; a corrupt
-selected checkpoint fails rather than silently merging workspaces.
+The production restore entry point is now `resume_checkpoint.py`. It selects one
+completed producer run first, then requires its latest-attempt artifact with the
+exact identity. It validates repository, branch, workflow and source SHA. Missing,
+expired, incompatible or corrupt checkpoints FAIL: there is no implicit fresh
+start, no fallback to an older producer, and no merging of workspaces.
 
 The previous `cef-windows-checkpoint-*` is not invalidated by this change. The
 Windows archive code, driver, port files and all inputs hashed by Windows
@@ -56,8 +58,8 @@ change the port's existing C-API/Release profile or system-library linkage polic
 
 Checkpoints use three-day retention, SDK artifacts seven days. All checkpoint
 parts are needed for restoration. Repository quotas/billing settings are not
-changed; full-source checkpoints consume substantial artifact storage. A cache
-miss, expired checkpoint or changed runner image can still force a fresh build.
+changed; full-source checkpoints consume substantial artifact storage. A missing checkpoint or changed runner image now stops automatic continuation;
+an intentional fresh build must be explicitly requested.
 
 ## Validation
 

@@ -1,3 +1,9 @@
+> **14 September 2026 correction:** hosted continuation now uses a **new run**,
+> selected by `resume_checkpoint.py`. Do not retry the producer run: previous-attempt
+> artifacts became undiscoverable in run 34746930913. The old retry guidance below
+> is historical; [CROSS-RUN-CONTINUATION.md](CROSS-RUN-CONTINUATION.md) is authoritative.
+> Archive schema and Windows recipe inputs are unchanged.
+
 # Windows build iterations
 
 Run `34565392341`, job `103156443144`, stopped after 18000 seconds at Ninja action
@@ -18,12 +24,13 @@ create a checkpoint. In particular a timeout is not reported as engine success.
 
 ## Continuation
 
-Re-run the workflow at the same source revision. Re-run-all and a later attempt
-of the same run can restore a previous attempt's artifact; names include run and
-attempt IDs to avoid immutable-artifact name conflicts. The most recent matching
-checkpoint amongst the last 100 repository artifacts is considered. Misses
-(including expired artifacts, changed recipes or changed runner images) cause a
-fresh build. A corrupt or incompatible selected checkpoint fails closed.
+Start a NEW workflow run, not another attempt of the producer. The production
+entry point is `resume_checkpoint.py`: it requires the exact latest-attempt
+checkpoint from one completed producer. Missing/expired/incompatible artifacts
+stop the job instead of selecting an older run or a fresh build. Increment and
+commit `vcpkg/static/iteration-request.json` on `static-engine` to start another
+iteration while keeping original `main` unchanged. Full instructions are in
+[CROSS-RUN-CONTINUATION.md](CROSS-RUN-CONTINUATION.md).
 
 Identity includes the absolute workspace, repository/ref, Windows runner image
 version and port/driver recipe bytes. Restores never overwrite a nonempty
@@ -50,7 +57,8 @@ cannot publish an SDK or attach a release asset. Release publication additionall
 requires both platform SDKs from the same run and the original proof/hash gates.
 The latest valid artifact for each platform from any attempt of that same run
 is selected; the integration SHA must still match. Diagnostics and test artifacts
-also carry the attempt number, so reruns do not overwrite immutable artifacts.
+also carry the attempt number for uniqueness, but that does not guarantee that
+artifacts from a previous attempt stay discoverable. Always continue via a new run.
 A native link, runtime or exporter error remains a build failure.
 
 The Windows change leaves the Linux build path, its ccache and the Dawn/Ozone

@@ -15,6 +15,18 @@ on:
       - '.github/workflows/static-engine-build.yml'
       - '.github/workflows/linux-checkpoint-regression.yml'
   workflow_dispatch:
+    inputs:
+      checkpoint_run:
+        description: 'Completed producer run ID; empty selects the latest branch producer (no fallback)'
+        type: string
+        required: false
+        default: ''
+      checkpoint_mode:
+        description: 'resume requires a checkpoint; fresh intentionally starts from source'
+        type: choice
+        options: [resume, fresh]
+        required: true
+        default: resume
   release:
     types: [published]
 permissions:
@@ -57,6 +69,8 @@ jobs:
       - name: Test Linux iteration and archive contracts
         if: runner.os == 'Linux'
         run: python -m unittest discover -s vcpkg/static/tests -v
+      - name: Test cross-run selection and no-progress guards on both platforms
+        run: python -m unittest discover -s vcpkg/static/tests -p test_resume_checkpoint.py -v
       - run: python -m compileall -q vcpkg/ports/cef-static vcpkg/static
   checkpoint-preflight:
     needs: contract
@@ -85,6 +99,8 @@ jobs:
     timeout-minutes: ${{ fromJSON(vars.CEF_STATIC_JOB_TIMEOUT_MINUTES || '350') }}
     env:
       CEF_STATIC_WORK: ${{ matrix.work_root }}
+      CEF_CHECKPOINT_RUN: ${{ inputs.checkpoint_run || '' }}
+      CEF_CHECKPOINT_MODE: ${{ inputs.checkpoint_mode || (github.event_name == 'release' && 'fresh') || 'resume' }}
       CEF_LINUX_SLICE_SECONDS: ${{ vars.CEF_LINUX_SLICE_SECONDS || '10800' }}
       CEF_WINDOWS_SLICE_SECONDS: ${{ vars.CEF_WINDOWS_SLICE_SECONDS || '10800' }}
       CEF_STATIC_BUILD_TIMEOUT_SECONDS: ${{ vars.CEF_STATIC_BUILD_TIMEOUT_SECONDS || '18000' }}
@@ -96,6 +112,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - name: Reject same-run retry before expensive setup
+        if: runner.environment == 'github-hosted'
+        run: python vcpkg/static/resume_checkpoint.py guard
       - name: Linux hosted-runner capacity and build-test utilities
         if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
@@ -119,13 +138,13 @@ jobs:
         if: runner.os == 'Windows' && runner.environment == 'github-hosted'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python vcpkg/static/checkpoint.py restore
+        run: python vcpkg/static/resume_checkpoint.py restore
       - name: Restore compatible Ubuntu source and Ninja checkpoint
         id: linux_checkpoint
         if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python vcpkg/static/linux_checkpoint.py restore
+        run: python vcpkg/static/resume_checkpoint.py restore
       - name: Resolve and verify the complete pinned source trees
         run: python vcpkg/ports/cef-static/source_build.py prepare --work "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}" --logs static-diagnostics/bootstrap
       - name: Install official Chromium Linux build prerequisites
@@ -144,6 +163,9 @@ jobs:
       # The native reference executable depends on all regression objects.
       # Building them separately traversed almost the entire engine graph and
       # timed out after one hour before this stage was reached (run 34505690797).
+      - name: Record restored Ninja outputs before the compilation slice
+        if: runner.environment == 'github-hosted'
+        run: python vcpkg/static/resume_checkpoint.py audit-before
       - name: Bounded Windows compilation (checkpoint is not an SDK)
         id: iteration
         if: runner.os == 'Windows' && runner.environment == 'github-hosted'
@@ -170,6 +192,11 @@ jobs:
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
+      - name: Require measurable progress after checkpoint upload
+        if: steps.iteration.outputs.checkpoint_ready == 'true' || steps.linux_iteration.outputs.checkpoint_ready == 'true'
+        env:
+          CEF_ITERATION_READY: ${{ steps.iteration.outputs.ready || steps.linux_iteration.outputs.ready || 'false' }}
+        run: python vcpkg/static/resume_checkpoint.py audit-after
       - name: Build through vcpkg and verify native and relocated SDK consumers
         id: package
         if: runner.environment != 'github-hosted' || (runner.os == 'Windows' && steps.iteration.outputs.ready == 'true') || (runner.os == 'Linux' && steps.linux_iteration.outputs.ready == 'true')
