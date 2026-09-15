@@ -25,6 +25,7 @@ static void Trace(HANDLE process, HANDLE thread) {
     symbol->SizeOfStruct = sizeof(SYMBOL_INFO); symbol->MaxNameLen = 1024;
     DWORD64 displacement = 0;
     const bool found = SymFromAddr(process, frame.AddrPC.Offset, &displacement, symbol) != FALSE;
+    if (!found) std::printf("SYMBOL_ERROR %lu\n", GetLastError());
     std::printf("FRAME %u 0x%llx %s +0x%llx\n", i, frame.AddrPC.Offset,
                 found ? symbol->Name : "<unresolved>", displacement);
     if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread, &frame, &context,
@@ -47,7 +48,7 @@ int wmain(int argc, wchar_t** argv) {
   }
   DebugSetProcessKillOnExit(TRUE);
   SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_LOAD_LINES);
-  const bool symbols = SymInitializeW(process.hProcess, directory.c_str(), FALSE) != FALSE;
+  bool symbols = false; // Initialize after the loader has mapped the process modules.
   bool initial_breakpoint = true;
   const ULONGLONG deadline = GetTickCount64() + 180000;
   DWORD exit_code = 1;
@@ -99,7 +100,10 @@ int wmain(int argc, wchar_t** argv) {
         auto& info = event.u.Exception;
         const DWORD code = info.ExceptionRecord.ExceptionCode;
         if (code == EXCEPTION_BREAKPOINT && initial_breakpoint && info.dwFirstChance) {
-          initial_breakpoint = false; break; // OS loader's one initial debug break only.
+          initial_breakpoint = false;
+          symbols = SymInitializeW(process.hProcess, directory.c_str(), TRUE) != FALSE;
+          std::printf("SYMBOL_INIT %d error=%lu\n", symbols ? 1 : 0, symbols ? 0 : GetLastError());
+          break; // OS loader's one initial debug break only.
         }
         std::printf("EXCEPTION code=0x%08lx first=%lu address=0x%llx\n", code,
                     info.dwFirstChance, reinterpret_cast<DWORD64>(info.ExceptionRecord.ExceptionAddress));
