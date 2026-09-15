@@ -23,7 +23,8 @@ def clean_failed_objects(out: Path, diagnostics: Path) -> dict:
         raise RuntimeError('No explicit failed compiler output; checkpoint not permitted')
     paths = []
     for failure in failures:
-        name = failure.strip()
+        # Newer Ninja annotates failed edges; pinned older Ninja omits this.
+        name = re.sub(r'^\[code=[12]\] ', '', failure.strip())
         # Do not guess linker/multi-output commands or parse shell-quoted paths.
         if not re.fullmatch(r'obj/[A-Za-z0-9_./+-]+\.o', name):
             raise RuntimeError('Unsupported failed edge; checkpoint not permitted: '+name)
