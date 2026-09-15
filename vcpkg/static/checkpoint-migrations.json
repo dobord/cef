@@ -2,20 +2,20 @@
   "schema": 1,
   "migrations": [
     {
-      "id": "windows-auditor-tools-v1",
+      "id": "windows-native-dumpbin-v1",
       "platform": "windows-x64",
       "from_recipe": "e77d2720e6ae109f3906e911a063766dd57ca0a478b422fccbbdd6f068f87944",
-      "to_recipe": "89d6b67c546e750f971874f56fc88e754abdfd8da0b44c0e0a099c1e33a6b52a",
+      "to_recipe": "aece11e6051e1cfe4884f5dec5b08bdcdd8ac98ef476d682f87b3865eed9b986",
       "producer_run": 34945553735,
       "producer_attempt": 1,
       "producer_sha": "093a171ebb91e8ccecfbb02db618a3d73b17e614",
       "source_upgrade_required": false
     },
     {
-      "id": "windows-auditor-tools-v1",
+      "id": "windows-native-dumpbin-v1",
       "platform": "linux-x64",
       "from_recipe": "22fb8bbcb10aa15a36ffc9ace4234dcee2dab2cd88ae0d088d7c79e048b00c6f",
-      "to_recipe": "5a2cad081b7ed15fa3d853da7dc0e2b3cd1b14d88c2f2b32255f43f15d9deb95",
+      "to_recipe": "e37fd70044971c76418a03b96a95805477fa64f2c65dbc30ea7c94ea06badb26",
       "producer_run": 34945553735,
       "producer_attempt": 1,
       "producer_sha": "093a171ebb91e8ccecfbb02db618a3d73b17e614",

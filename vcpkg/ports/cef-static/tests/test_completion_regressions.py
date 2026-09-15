@@ -100,7 +100,7 @@ class PhaseTests(unittest.TestCase):
              mock.patch.object(build, 'setup_environment'), \
              mock.patch.object(build, 'prepare', return_value=root/'source') as prepare, \
              mock.patch.object(build, 'configuration', return_value=root/'out') as configure, \
-             mock.patch.object(build, 'ensure_windows_readobj') as auditor, \
+             mock.patch.object(build, 'ensure_windows_dumpbin') as auditor, \
              mock.patch.object(build, 'compile_regressions') as regress, \
              mock.patch.object(build, 'compile_and_test') as native, \
              contextlib.redirect_stdout(io.StringIO()):

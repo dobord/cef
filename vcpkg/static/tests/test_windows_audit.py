@@ -15,107 +15,81 @@ ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location('audit_builder', ROOT/'vcpkg/ports/cef-static/source_build.py')
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
-GOOD_OUTPUT = 'Format: COFF-x86-64\nArch: x86_64\nImport {\n  Name: KERNEL32.dll\n}\n'
+GOOD_OUTPUT = 'FILE HEADER VALUES\n 8664 machine (x64)\n 20B magic # (PE32+)\n Section contains the following imports:\n KERNEL32.dll\n'
 
 
-class AcquisitionTests(unittest.TestCase):
+class DiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='audit unit spaces ')
         self.addCleanup(self.temp.cleanup)
         self.work = Path(self.temp.name)
-        self.source = self.work/'download/chromium/src'
+        self.source = self.work/'source'
         self.logs = self.work/'logs'
-        self.updater = self.source/'tools/clang/scripts/update.py'
-        self.updater.parent.mkdir(parents=True)
-        data = b'# locally mocked installer, not upstream\n'
-        self.updater.write_bytes(data)
-        blob = hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
+        self.program_files = self.work/'program files x86'
+        self.vswhere = self.program_files/'Microsoft Visual Studio/Installer/vswhere.exe'
+        self.vswhere.parent.mkdir(parents=True); self.vswhere.write_bytes(b'MZ finder')
+        self.vs = self.work/'VS 2022'
+        self.version_file = self.vs/'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt'
+        self.version_file.parent.mkdir(parents=True); self.version_file.write_text('14.44.35207')
+        self.binary = self.vs/'VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/dumpbin.exe'
+        self.binary.parent.mkdir(parents=True); self.binary.write_bytes(b'MZ auditor')
         self.addCleanup(patch.stopall)
         patch.object(build, 'WINDOWS', True).start()
-        patch.object(build, 'CLANG_UPDATE_BLOB', blob).start()
-        patch.dict(os.environ, {}, clear=True).start()
-        self.download = patch.object(build, 'run_network', side_effect=self.install).start()
-        self.run = patch.object(build, 'run', return_value='LLVM version 23.0.0git\n').start()
+        patch.dict(os.environ, {'ProgramFiles(x86)':str(self.program_files)}, clear=True).start()
+        self.run = patch.object(build, 'run', side_effect=self.invoke).start()
 
-    def install(self, command, cwd, logs, name, **kwargs):
-        args = [str(a) for a in command]
-        self.assertIn('--package=objdump', args)
-        self.assertIn('--host-os=win', args)
-        installer = Path(args[3])
-        self.assertEqual(installer.read_bytes(), self.updater.read_bytes().replace(b'\r\n', b'\n'))
-        self.assertFalse(installer.is_relative_to(self.source))
-        directory = Path(next(a.split('=', 1)[1] for a in args if a.startswith('--output-dir=')))
-        self.assertFalse(directory.is_relative_to(self.source))
-        (directory/'bin').mkdir(parents=True)
-        (directory/'bin/llvm-readobj.exe').write_bytes(b'MZ-mocked-auditor')
-        (directory/'objdump_revision').write_text(build.WINDOWS_AUDIT_VERSION+'\n')
-        return ''
+    def invoke(self, command, *args, **kwargs):
+        if Path(command[0]) == self.vswhere:
+            self.assertIn('[17.0,18.0)', command)
+            return str(self.vs)+'\n'
+        self.assertEqual(command, [self.binary, '/?'])
+        return 'Microsoft (R) COFF/PE Dumper Version 14.44.35219.0\n'
 
-    def acquire(self):
-        return build.ensure_windows_readobj(self.source, self.work, self.logs)
+    def discover(self):
+        return build.ensure_windows_dumpbin(self.source, self.work, self.logs)
 
-    def test_install_and_cache_do_not_modify_compiler_or_source(self):
-        compiler = self.source/'third_party/llvm-build/Release+Asserts/bin/clang-cl.exe'
-        compiler.parent.mkdir(parents=True); compiler.write_bytes(b'compiler sentinel')
-        before = {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in self.source.rglob('*') if p.is_file()}
-        binary = self.acquire()
-        self.assertTrue(binary.is_file()); self.assertFalse(binary.is_relative_to(self.source))
-        self.assertEqual(self.acquire(), binary)
-        self.download.assert_called_once()
-        self.assertEqual(before, {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in self.source.rglob('*') if p.is_file()})
-        proof = json.loads((self.logs/'windows-audit-tool.json').read_text())
+    def test_exact_native_tool_and_provenance_without_source_changes(self):
+        before={str(p):p.read_bytes() for p in self.work.rglob('*') if p.is_file()}
+        self.assertEqual(self.discover(), self.binary)
+        for name,data in before.items(): self.assertEqual(Path(name).read_bytes(),data)
+        proof=json.loads((self.logs/'windows-audit-tool.json').read_text())
+        self.assertEqual(proof['toolset_version'],'14.44.35207')
+        self.assertEqual(proof['executable_sha256'],build.digest(self.binary))
         self.assertFalse(proof['engine_runtime_verified'])
 
-    def test_crlf_upstream_script_is_normalized_before_blob_check(self):
-        self.updater.write_bytes(self.updater.read_bytes().replace(b'\n', b'\r\n'))
-        self.acquire(); self.download.assert_called_once()
+    def test_missing_vswhere_does_not_use_path_fallback(self):
+        self.vswhere.unlink()
+        with patch.object(build.shutil,'which') as which, self.assertRaises(RuntimeError): self.discover()
+        which.assert_not_called();self.run.assert_not_called()
 
-    def test_wrong_upstream_blob_rejected_without_download(self):
-        self.updater.write_text('changed script')
-        with self.assertRaisesRegex(RuntimeError, 'Git blob'): self.acquire()
-        self.download.assert_not_called()
+    def test_ambiguous_or_missing_visual_studio_is_rejected(self):
+        for value in ['',str(self.vs)+'\n'+str(self.vs), 'relative']:
+            self.run.side_effect=None;self.run.return_value=value
+            with self.subTest(value=value),self.assertRaises(RuntimeError):self.discover()
 
-    def test_unreviewed_origin_rejected_without_download(self):
-        with patch.dict(os.environ, CDS_CLANG_BUCKET_OVERRIDE='https://example.invalid'):
-            with self.assertRaisesRegex(RuntimeError, 'origin'): self.acquire()
-        self.download.assert_not_called()
+    def test_invalid_toolset_version_is_rejected(self):
+        for value in ['../other','14.44.35207/evil','15.0.12345']:
+            self.version_file.write_text(value)
+            with self.subTest(value=value),self.assertRaises(RuntimeError):self.discover()
 
-    def test_failed_download_never_installs_partial_cache(self):
-        self.download.side_effect = RuntimeError('simulated transport error')
-        with self.assertRaisesRegex(RuntimeError, 'transport'): self.acquire()
-        self.assertFalse(list(self.work.glob('windows-audit-*')))
-        self.assertFalse(list(self.work.glob('cef-audit-acquire-*')))
+    def test_missing_or_non_pe_auditor_rejected(self):
+        self.binary.write_bytes(b'not a PE')
+        with self.assertRaises(RuntimeError):self.discover()
+        self.binary.unlink()
+        with self.assertRaises(RuntimeError):self.discover()
 
-    def test_missing_executable_in_download_fails_closed(self):
-        self.download.side_effect = lambda *a, **kw: ''
-        with self.assertRaisesRegex(RuntimeError, 'Incomplete'): self.acquire()
-        self.assertFalse(list(self.work.glob('windows-audit-*')))
+    def test_discovery_failure_removes_stale_proof(self):
+        self.discover();self.run.side_effect=RuntimeError('discovery failed')
+        with self.assertRaises(RuntimeError):self.discover()
+        self.assertFalse((self.logs/'windows-audit-tool.json').exists())
 
-    def test_wrong_executable_version_rejected(self):
-        self.run.return_value = 'LLVM version 99.0\n'
-        with self.assertRaisesRegex(RuntimeError, 'version'): self.acquire()
+    def test_unrecognized_auditor_version_rejected(self):
+        self.run.side_effect=[str(self.vs),'unknown tool']
+        with self.assertRaisesRegex(RuntimeError,'version'):self.discover()
 
-    def test_modified_cached_binary_rejected_without_redownload(self):
-        binary = self.acquire(); binary.write_bytes(b'MZ-replaced')
-        with self.assertRaisesRegex(RuntimeError, 'hash mismatch'): self.acquire()
-        self.download.assert_called_once()
-
-    def test_stamp_or_receipt_mismatch_is_not_a_cache_hit(self):
-        binary = self.acquire(); (binary.parent.parent/'objdump_revision').write_text('wrong')
-        with self.assertRaisesRegex(RuntimeError, 'stamp'): self.acquire()
-        self.download.assert_called_once()
-
-    def test_existing_unmanaged_directory_is_not_overwritten(self):
-        target = self.work/('windows-audit-'+build.WINDOWS_AUDIT_VERSION)
-        target.mkdir(); (target/'unrelated').write_text('retain')
-        with self.assertRaises(RuntimeError): self.acquire()
-        self.assertEqual((target/'unrelated').read_text(), 'retain')
-        self.download.assert_not_called()
-
-    def test_no_path_fallback_or_cross_host(self):
-        with patch.object(build, 'WINDOWS', False), patch.object(build.shutil, 'which') as which:
-            with self.assertRaisesRegex(RuntimeError, 'native Windows'): self.acquire()
-            which.assert_not_called()
+    def test_wrong_host_rejected_before_discovery(self):
+        with patch.object(build,'WINDOWS',False),self.assertRaises(RuntimeError):self.discover()
+        self.run.assert_not_called()
 
 
 class BinaryAuditTests(unittest.TestCase):
@@ -124,9 +98,9 @@ class BinaryAuditTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.exe = self.root/'fixture.exe'; self.exe.write_bytes(b'MZ fixture')
-        self.auditor = self.root/'llvm-readobj.exe'; self.auditor.write_bytes(b'MZ auditor')
+        self.auditor = self.root/'dumpbin.exe'; self.auditor.write_bytes(b'MZ auditor')
         self.addCleanup(patch.stopall)
-        self.ensure = patch.object(build, 'ensure_windows_readobj', return_value=self.auditor).start()
+        self.ensure = patch.object(build, 'ensure_windows_dumpbin', return_value=self.auditor).start()
         self.run = patch.object(build, 'run', return_value=GOOD_OUTPUT).start()
 
     def audit(self):
@@ -134,21 +108,21 @@ class BinaryAuditTests(unittest.TestCase):
 
     def test_real_headers_required_and_no_runtime_success_claim(self):
         self.audit()
-        self.assertIn('--coff-imports', self.run.call_args.args[0])
+        self.assertIn('/IMPORTS', self.run.call_args.args[0])
         proof = json.loads((self.root/'binary-imports-proof.json').read_text())
         self.assertTrue(proof['imports_verified']); self.assertFalse(proof['engine_runtime_verified'])
 
     def test_empty_garbled_and_non_x64_output_rejected(self):
-        for text in ['', 'tool ran', GOOD_OUTPUT.replace('COFF-x86-64', 'COFF-i386'),
-                     GOOD_OUTPUT.split('Import')[0]]:
+        for text in ['', 'tool ran', GOOD_OUTPUT.replace('8664 machine (x64)', '14C machine (x86)'),
+                     GOOD_OUTPUT.split('Section contains')[0]]:
             with self.subTest(text=text):
                 self.run.return_value = text
                 with self.assertRaisesRegex(RuntimeError, 'PE headers'): self.audit()
 
     def test_direct_and_delay_forbidden_imports_rejected(self):
-        for kind in ['Import', 'DelayImport']:
+        for kind in ['imports', 'delay load imports']:
             for dll in ['libcef.dll', 'dxcompiler.dll', 'libGLESv2.dll', 'VCRUNTIME140.dll', 'ucrtbase.dll']:
-                self.run.return_value = GOOD_OUTPUT+f'{kind} {{\n  Name: {dll}\n}}\n'
+                self.run.return_value = GOOD_OUTPUT+f'Section contains the following {kind}:\n {dll}\n'
                 with self.subTest(kind=kind, dll=dll), self.assertRaisesRegex(RuntimeError, 'forbidden'):
                     self.audit()
 
@@ -167,22 +141,20 @@ class BinaryAuditTests(unittest.TestCase):
         self.run.assert_not_called()
 
 
-@unittest.skipUnless(os.name == 'nt' and os.environ.get('CEF_PINNED_CLANG_UPDATE'),
-                     'Pinned native Windows auditor is exercised by windows-audit-regression CI')
+@unittest.skipUnless(os.name == 'nt' and os.environ.get('CEF_NATIVE_WINDOWS_AUDIT'),
+                     'Native Windows auditor is exercised by windows-audit-regression CI')
 class NativeWindowsTests(unittest.TestCase):
-    def test_pinned_acquisition_and_real_normal_delay_crt_imports(self):
+    def test_native_auditor_and_real_normal_delay_crt_imports(self):
         with tempfile.TemporaryDirectory(prefix='CEF native audit spaces ') as tmp:
             root = Path(tmp); source = root/'source'; logs = root/'logs'; logs.mkdir()
-            updater = source/'tools/clang/scripts/update.py'; updater.parent.mkdir(parents=True)
-            shutil.copy2(os.environ['CEF_PINNED_CLANG_UPDATE'], updater)
-            compiler_sentinel = source/'third_party/llvm-build/Release+Asserts/bin/clang-cl.exe'
-            compiler_sentinel.parent.mkdir(parents=True); compiler_sentinel.write_bytes(b'unchanged sentinel')
-            before = compiler_sentinel.stat().st_mtime_ns
-            readobj = build.ensure_windows_readobj(source, root, logs)
-            with patch.object(build, 'run_network', side_effect=AssertionError('cache must not download')):
-                self.assertEqual(build.ensure_windows_readobj(source, root, logs), readobj)
-            self.assertEqual(compiler_sentinel.read_bytes(), b'unchanged sentinel')
-            self.assertEqual(compiler_sentinel.stat().st_mtime_ns, before)
+            source.mkdir()
+            sentinel = source/'compiler-sentinel';sentinel.write_bytes(b'unchanged compiler')
+            before=sentinel.stat().st_mtime_ns
+            # No developer-prompt PATH is needed to discover or execute the auditor.
+            with patch.dict(os.environ, PATH=str(Path(os.environ['SystemRoot'])/'System32')):
+                readobj=build.ensure_windows_dumpbin(source, root, logs)
+            self.assertEqual(sentinel.read_bytes(),b'unchanged compiler')
+            self.assertEqual(sentinel.stat().st_mtime_ns,before)
             def compile_file(name, text, *args):
                 path = root/(name+'.c'); path.write_text(text)
                 result = subprocess.run(['cl.exe', '/nologo', '/W4', '/WX', str(path), *args],
@@ -198,7 +170,7 @@ class NativeWindowsTests(unittest.TestCase):
             for name in ['direct', 'delayed']:
                 with self.assertRaisesRegex(RuntimeError, 'libcef.dll'):
                     build.audit_windows_binary(source, root, logs, root/(name+'.exe'), name)
-            self.assertIn('DelayImport {', (logs/'delayed.log').read_text())
+            self.assertIn('delay load imports', (logs/'delayed.log').read_text().lower())
             compile_file('dynamic_crt', '#include <stdio.h>\nint main(void){return puts("fixture")==EOF;}\n', '/MD', '/Fe:dynamic_crt.exe')
             with self.assertRaisesRegex(RuntimeError, 'forbidden'):
                 build.audit_windows_binary(source, root, logs, root/'dynamic_crt.exe', 'dynamic-crt')
@@ -210,8 +182,8 @@ class NativeWindowsTests(unittest.TestCase):
             for path in logs.iterdir():
                 if path.is_file(): shutil.copy2(path, output/path.name)
             (output/'result.json').write_text(json.dumps({
-                'fixture_not_cef': True, 'pinned_auditor_downloaded_and_executed': True,
-                'cache_reuse_verified': True, 'compiler_unchanged': True,
+                'fixture_not_cef': True, 'native_vs_auditor_discovered_and_executed': True,
+                'sanitized_path_verified': True, 'compiler_unchanged': True,
                 'normal_os_imports_accepted_and_executable_ran': True,
                 'normal_and_delay_libcef_imports_rejected': True,
                 'dynamic_crt_rejected': True, 'truncated_pe_rejected': True,

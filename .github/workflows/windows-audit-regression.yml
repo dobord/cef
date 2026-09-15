@@ -1,4 +1,4 @@
-name: Pinned Windows PE audit tools (not a CEF runtime test)
+name: Native Windows PE audit tools (not a CEF runtime test)
 on:
   workflow_call:
   push:
@@ -29,21 +29,10 @@ jobs:
             if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH|VSINSTALLDIR|VCINSTALLDIR|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion|VSCMD_[^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
           }
           if ($LASTEXITCODE -ne 0) { throw "MSVC environment initialization failed" }
-      - name: Fetch the exact pinned Chromium installer
-        shell: python
-        run: |
-          import hashlib, os, pathlib, urllib.request
-          url = 'https://raw.githubusercontent.com/chromium/chromium/79460ebecaa5625e57a5fb679a735659e73dc687/tools/clang/scripts/update.py'
-          with urllib.request.urlopen(url, timeout=60) as stream:
-              data = stream.read()
-          actual = hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
-          if actual != '9cf9371c34f55f06c62eeff23fa33346202e0825':
-              raise RuntimeError('Pinned Chromium installer mismatch')
-          (pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-clang-update.py').write_bytes(data)
-      - name: Test actual pinned tool acquisition and PE import rejection
+      - name: Test native MSVC auditor and PE import rejection
         run: python -I -m unittest discover -s vcpkg/static/tests -p test_windows_audit.py -v
         env:
-          CEF_PINNED_CLANG_UPDATE: ${{ runner.temp }}/cef-clang-update.py
+          CEF_NATIVE_WINDOWS_AUDIT: '1'
       - name: Preserve native fixture proof and auditor provenance
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
