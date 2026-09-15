@@ -2,24 +2,24 @@
   "schema": 1,
   "migrations": [
     {
-      "id": "windows-native-dumpbin-v1",
+      "id": "native-pe-probe-and-dawn-x11-link-v1",
       "platform": "windows-x64",
       "from_recipe": "e77d2720e6ae109f3906e911a063766dd57ca0a478b422fccbbdd6f068f87944",
-      "to_recipe": "aece11e6051e1cfe4884f5dec5b08bdcdd8ac98ef476d682f87b3865eed9b986",
+      "to_recipe": "a6276b41fb335e0127d99c8aec52abd01ba7e55550b8c68eb53203c07b501b4a",
       "producer_run": 34945553735,
       "producer_attempt": 1,
       "producer_sha": "093a171ebb91e8ccecfbb02db618a3d73b17e614",
-      "source_upgrade_required": false
+      "source_upgrade_required": true
     },
     {
-      "id": "windows-native-dumpbin-v1",
+      "id": "native-pe-probe-and-dawn-x11-link-v1",
       "platform": "linux-x64",
       "from_recipe": "22fb8bbcb10aa15a36ffc9ace4234dcee2dab2cd88ae0d088d7c79e048b00c6f",
-      "to_recipe": "e37fd70044971c76418a03b96a95805477fa64f2c65dbc30ea7c94ea06badb26",
-      "producer_run": 34945553735,
+      "to_recipe": "19fe97fa2facaf2fc4c5bcc5fab506abb3fffdafa7f122c8a4a8e6badf774b2c",
+      "producer_run": 34925623502,
       "producer_attempt": 1,
-      "producer_sha": "093a171ebb91e8ccecfbb02db618a3d73b17e614",
-      "source_upgrade_required": false
+      "producer_sha": "6521eefd77fb46dd2a1b80f8a20c30d53b29b595",
+      "source_upgrade_required": true
     }
   ]
 }

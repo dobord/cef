@@ -42,8 +42,8 @@ class DiscoveryTests(unittest.TestCase):
         if Path(command[0]) == self.vswhere:
             self.assertIn('[17.0,18.0)', command)
             return str(self.vs)+'\n'
-        self.assertEqual(command, [self.binary, '/?'])
-        return 'Microsoft (R) COFF/PE Dumper Version 14.44.35219.0\n'
+        self.assertEqual(command, [self.binary, '/HEADERS', self.binary])
+        return 'Microsoft (R) COFF/PE Dumper Version 14.44.35219.0\n'+GOOD_OUTPUT
 
     def discover(self):
         return build.ensure_windows_dumpbin(self.source, self.work, self.logs)
@@ -86,6 +86,20 @@ class DiscoveryTests(unittest.TestCase):
     def test_unrecognized_auditor_version_rejected(self):
         self.run.side_effect=[str(self.vs),'unknown tool']
         with self.assertRaisesRegex(RuntimeError,'version'):self.discover()
+
+    def test_help_exit_is_not_accepted_as_tool_success(self):
+        self.run.side_effect = [str(self.vs), RuntimeError('exited 1100')]
+        with self.assertRaisesRegex(RuntimeError, '1100'):
+            self.discover()
+        self.assertFalse((self.logs/'windows-audit-tool.json').exists())
+
+    def test_version_banner_without_decoded_x64_headers_is_rejected(self):
+        banner = 'Microsoft (R) COFF/PE Dumper Version 14.44.35219.0\n'
+        for output in (banner, banner+GOOD_OUTPUT.replace('8664', '14C')):
+            self.run.side_effect = [str(self.vs), output]
+            with self.assertRaisesRegex(RuntimeError, 'self-probe'):
+                self.discover()
+            self.assertFalse((self.logs/'windows-audit-tool.json').exists())
 
     def test_wrong_host_rejected_before_discovery(self):
         with patch.object(build,'WINDOWS',False),self.assertRaises(RuntimeError):self.discover()
@@ -147,40 +161,43 @@ class NativeWindowsTests(unittest.TestCase):
     def test_native_auditor_and_real_normal_delay_crt_imports(self):
         with tempfile.TemporaryDirectory(prefix='CEF native audit spaces ') as tmp:
             root = Path(tmp); source = root/'source'; logs = root/'logs'; logs.mkdir()
-            source.mkdir()
-            sentinel = source/'compiler-sentinel';sentinel.write_bytes(b'unchanged compiler')
-            before=sentinel.stat().st_mtime_ns
-            # No developer-prompt PATH is needed to discover or execute the auditor.
-            with patch.dict(os.environ, PATH=str(Path(os.environ['SystemRoot'])/'System32')):
-                readobj=build.ensure_windows_dumpbin(source, root, logs)
-            self.assertEqual(sentinel.read_bytes(),b'unchanged compiler')
-            self.assertEqual(sentinel.stat().st_mtime_ns,before)
-            def compile_file(name, text, *args):
-                path = root/(name+'.c'); path.write_text(text)
-                result = subprocess.run(['cl.exe', '/nologo', '/W4', '/WX', str(path), *args],
-                                        cwd=root, capture_output=True, text=True, timeout=90)
-                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-            compile_file('good', '#include <windows.h>\nint main(void){return GetCurrentProcessId()==0;}\n', '/MT', '/Fe:good.exe')
-            build.audit_windows_binary(source, root, logs, root/'good.exe', 'good')
-            subprocess.run([root/'good.exe'], check=True, timeout=10)
-            compile_file('shared', '__declspec(dllexport) int probe(void){return 42;}\n', '/MT', '/LD', '/Fe:libcef.dll')
-            client = '__declspec(dllimport) int probe(void);\nint main(void){return probe()==42?0:1;}\n'
-            compile_file('direct', client, '/MT', '/Fe:direct.exe', 'libcef.lib')
-            compile_file('delayed', client, '/MT', '/Fe:delayed.exe', 'libcef.lib', 'delayimp.lib', '/link', '/DELAYLOAD:libcef.dll')
-            for name in ['direct', 'delayed']:
-                with self.assertRaisesRegex(RuntimeError, 'libcef.dll'):
-                    build.audit_windows_binary(source, root, logs, root/(name+'.exe'), name)
-            self.assertIn('delay load imports', (logs/'delayed.log').read_text().lower())
-            compile_file('dynamic_crt', '#include <stdio.h>\nint main(void){return puts("fixture")==EOF;}\n', '/MD', '/Fe:dynamic_crt.exe')
-            with self.assertRaisesRegex(RuntimeError, 'forbidden'):
-                build.audit_windows_binary(source, root, logs, root/'dynamic_crt.exe', 'dynamic-crt')
-            (root/'truncated.exe').write_bytes(b'MZbad')
-            with self.assertRaises(RuntimeError):
-                build.audit_windows_binary(source, root, logs, root/'truncated.exe', 'invalid-pe')
             output = ROOT/'static-diagnostics/windows-audit-native'
             output.mkdir(parents=True, exist_ok=True)
-            for path in logs.iterdir():
-                if path.is_file(): shutil.copy2(path, output/path.name)
+            (output/'result.json').unlink(missing_ok=True)
+            try:
+                source.mkdir()
+                sentinel = source/'compiler-sentinel';sentinel.write_bytes(b'unchanged compiler')
+                before=sentinel.stat().st_mtime_ns
+                # No developer-prompt PATH is needed to discover or execute the auditor.
+                with patch.dict(os.environ, PATH=str(Path(os.environ['SystemRoot'])/'System32')):
+                    readobj=build.ensure_windows_dumpbin(source, root, logs)
+                self.assertEqual(sentinel.read_bytes(),b'unchanged compiler')
+                self.assertEqual(sentinel.stat().st_mtime_ns,before)
+                def compile_file(name, text, *args):
+                    path = root/(name+'.c'); path.write_text(text)
+                    result = subprocess.run(['cl.exe', '/nologo', '/W4', '/WX', str(path), *args],
+                                            cwd=root, capture_output=True, text=True, timeout=90)
+                    self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+                compile_file('good', '#include <windows.h>\nint main(void){return GetCurrentProcessId()==0;}\n', '/MT', '/Fe:good.exe')
+                build.audit_windows_binary(source, root, logs, root/'good.exe', 'good')
+                subprocess.run([root/'good.exe'], check=True, timeout=10)
+                compile_file('shared', '__declspec(dllexport) int probe(void){return 42;}\n', '/MT', '/LD', '/Fe:libcef.dll')
+                client = '__declspec(dllimport) int probe(void);\nint main(void){return probe()==42?0:1;}\n'
+                compile_file('direct', client, '/MT', '/Fe:direct.exe', 'libcef.lib')
+                compile_file('delayed', client, '/MT', '/Fe:delayed.exe', 'libcef.lib', 'delayimp.lib', '/link', '/DELAYLOAD:libcef.dll')
+                for name in ['direct', 'delayed']:
+                    with self.assertRaisesRegex(RuntimeError, 'libcef.dll'):
+                        build.audit_windows_binary(source, root, logs, root/(name+'.exe'), name)
+                self.assertIn('delay load imports', (logs/'delayed.log').read_text().lower())
+                compile_file('dynamic_crt', '#include <stdio.h>\nint main(void){return puts("fixture")==EOF;}\n', '/MD', '/Fe:dynamic_crt.exe')
+                with self.assertRaisesRegex(RuntimeError, 'forbidden'):
+                    build.audit_windows_binary(source, root, logs, root/'dynamic_crt.exe', 'dynamic-crt')
+                (root/'truncated.exe').write_bytes(b'MZbad')
+                with self.assertRaises(RuntimeError):
+                    build.audit_windows_binary(source, root, logs, root/'truncated.exe', 'invalid-pe')
+            finally:
+                for path in logs.iterdir():
+                    if path.is_file(): shutil.copy2(path, output/path.name)
             (output/'result.json').write_text(json.dumps({
                 'fixture_not_cef': True, 'native_vs_auditor_discovered_and_executed': True,
                 'sanitized_path_verified': True, 'compiler_unchanged': True,

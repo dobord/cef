@@ -313,10 +313,16 @@ def ensure_windows_dumpbin(source: Path, work: Path, logs: Path) -> Path:
     with binary.open('rb') as stream:
         if stream.read(2) != b'MZ':
             raise RuntimeError('Visual Studio auditor is not a PE executable')
-    help_text = run([binary, '/?'], work, logs, 'windows-audit-version', timeout=30)
+    # /? prints valid help but MSVC DUMPBIN returns 1100. Probe a real PE
+    # instead; retain run()'s strict zero-exit and timeout requirements.
+    help_text = run([binary, '/HEADERS', binary], work, logs,
+                    'windows-audit-version', timeout=30)
     match = re.search(r'Microsoft.*COFF/PE Dumper Version ([0-9.]+)', help_text)
     if not match:
         raise RuntimeError('Unexpected DUMPBIN version output')
+    if (not re.search(r'\b8664 machine \(x64\)', help_text, re.I)
+            or not re.search(r'\b20B magic # \(PE32\+\)', help_text, re.I)):
+        raise RuntimeError('DUMPBIN self-probe did not decode an x64 PE image')
     (logs/'windows-audit-tool.json').write_text(json.dumps({
         'schema': 1, 'auditor': 'Microsoft DUMPBIN', 'toolset_version': version,
         'auditor_version': match.group(1), 'installation': str(vs),
@@ -409,6 +415,11 @@ def configuration(source: Path, logs: Path) -> Path:
         (cef/'static').mkdir(exist_ok=True)
         shutil.copy2(HERE/'smoke.c', cef/'static/smoke.c')
         marker.write_text(json.dumps({'recipe': recipe})+'\n')
+    # Supplemental GN correction is verified and idempotent. Preserve the
+    # existing base patch marker and all source/object timestamps otherwise.
+    run(python_script(HERE/'skia_x11_link.py', '--source', source,
+                      '--receipt', logs/'skia-x11-link.json'),
+        source, logs, 'skia-x11-link')
     spec = importlib.util.spec_from_file_location('cef_gn_args', cef/'tools/gn_args.py')
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -433,6 +444,13 @@ def configuration(source: Path, logs: Path) -> Path:
     shutil.copy2(out/'args.gn', logs/'args.gn')
     gn = find_binary(source, ['buildtools/win/gn.exe'] if WINDOWS else ['buildtools/linux64/gn'])
     run(gn_generate_command(gn, out), source, logs, 'gn-gen', timeout=1200)
+    if not WINDOWS:
+        viz = run([gn, 'desc', out, '//components/viz/service:service', '--format=json'],
+                  source, logs, 'viz-x11-graph', timeout=300, quiet=True)
+        viz_path = logs/'viz-x11-graph.json'
+        viz_path.write_text(viz, encoding='utf-8')
+        run(python_script(HERE/'skia_x11_link.py', '--verify-graph', viz_path),
+            source, logs, 'viz-x11-graph-check')
     # `gn desc` JSON combines data_deps with link dependencies. Walking that
     # union incorrectly treats build-only ANGLE stubs as runtime imports.
     # Keep metadata for the actual link target, then inspect Ninja's link edge.
