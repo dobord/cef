@@ -1,0 +1,116 @@
+name: Resolve native CEF startup symbols (diagnostic only)
+on:
+  push:
+    branches: [static-engine]
+    paths: ['.github/workflows/native-symbol-diagnostic.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  symbolize:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Release unused Linux runner packages for checkpoint capacity
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/share/dotnet
+          df -h
+      - name: Restore the explicitly selected completed-link producer
+        run: python3 vcpkg/static/resume_checkpoint.py restore --checkpoint-run 34966563985
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Inspect sources and resolve recorded crash addresses
+        shell: python
+        run: |
+          import bisect, hashlib, json, os, pathlib, re, shutil, subprocess
+          root = pathlib.Path.cwd()
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-static'
+          source = work/'download/chromium/src'
+          out = source/'out/CEF_Static_Release_x64'
+          logs = root/'symbol-diagnostics'; logs.mkdir(exist_ok=True)
+          windows = os.name == 'nt'
+          exe = out/('cef_static_smoke.exe' if windows else 'cef_static_smoke')
+          def sha(path):
+              with path.open('rb') as stream: return hashlib.file_digest(stream, 'sha256').hexdigest()
+          before = sha(exe)
+          for name in ['base/rand_util.cc', 'base/rand_util.h', 'base/metrics/histogram_base.cc',
+                       'base/allocator/partition_allocator/src/partition_alloc/thread_cache.cc',
+                       'cef-static-patched.json']:
+              path = source/name
+              if not path.is_file(): raise RuntimeError('Missing diagnostic source: '+name)
+              target = logs/'sources'/name; target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(path, target)
+          symbols = []
+          if windows:
+              base = 0x7ff6fcaa0000
+              addresses = [0x7ff709dfb07a,0x7ff709d71f56,0x7ff70741b0c9,0x7ff70769769e,
+                           0x7ff7076c2468,0x7ff707702396,0x7ff707701f40,0x7ff7076bfb69,
+                           0x7ff7074d7087,0x7ff70759836a,0x7ff70756f1ed,0x7ff709d8acca,
+                           0x7ff709d8ac4c,0x7ff709d87d49,0x7ff7076352c7,0x7ff713f92f3f,
+                           0x7ff7076307d1,0x7ff709d75343,0x7ff709d7634c,0x7ff7074b918b,
+                           0x7ff6fcece823,0x7ff707540474,0x7ff70ec0a179,0x7ff70ec09e78,0x7ff7074cc379]
+              if before != '4713813216ac26efe1160eef941fdc37e227a26186912e31ce110ebba7523a5f':
+                  raise RuntimeError('Windows executable does not match recorded stack')
+              ninja = source/'third_party/ninja/ninja.exe'
+              commands = subprocess.check_output([str(ninja), '-C', str(out), '-t', 'commands', '-s', 'cef_static_smoke.exe'], text=True, timeout=120)
+              rows = [line for line in commands.splitlines() if 'lld-link' in line and 'cef_static_smoke.exe' in line]
+              if len(rows) != 1: raise RuntimeError('Ambiguous final link command')
+              map_path = logs/'cef-static.map'
+              command = rows[0] + ' ' + subprocess.list2cmdline(['/MAP:'+str(map_path)])
+              (logs/'map-command.txt').write_text(command, encoding='utf-8')
+              with (logs/'map-link.log').open('w', encoding='utf-8') as stream:
+                  subprocess.run(command, shell=True, cwd=out, stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=1200)
+              if sha(exe) != before: raise RuntimeError('Map relink changed executable; stack cannot be mapped')
+              preferred = None
+              with map_path.open(encoding='utf-8', errors='replace') as stream:
+                  for line in stream:
+                      match = re.search(r'Preferred load address is\s+([0-9a-f]+)', line, re.I)
+                      if match: preferred = int(match.group(1),16)
+                      match = re.match(r'\s*[0-9a-f]{4}:[0-9a-f]+\s+(\S+)\s+([0-9a-f]{16})\s+(.*)', line, re.I)
+                      if match and preferred is not None:
+                          symbols.append((int(match.group(2),16)-preferred, match.group(1)+' '+match.group(3)))
+              if not symbols: raise RuntimeError('Empty linker map')
+              rvas = [a-base for a in addresses]
+          else:
+              rvas = [0x1056bc22,0x10584316,0x102b8203,0x106021c7,0x106b3220,0x1061b3e7,
+                      0x1061b000,0x106bbba9,0x10416966,0x10417354,0x1043eb8d,0x105fa8a0,
+                      0x105fe7aa,0x10585461,0x1043fb8d,0x104e8c90,0x1043e164,0x10444837,
+                      0x104a711b,0x104b17dc,0x104b138d,0x104b126a,0x104e9e08]
+              nm = shutil.which('nm')
+              if not nm: raise RuntimeError('Missing native ELF symbol reader')
+              nm_path = logs/'elf-symbols.txt'
+              with nm_path.open('w',encoding='utf-8') as stream:
+                  subprocess.run([nm,'-n','-C','--defined-only',str(exe)],stdout=stream,stderr=subprocess.PIPE,check=True,timeout=300)
+              with nm_path.open(encoding='utf-8',errors='replace') as stream:
+                  for line in stream:
+                      match = re.match(r'([0-9a-f]+)\s+[tTwW]\s+(.+)',line)
+                      if match: symbols.append((int(match.group(1),16),match.group(2)))
+              if not symbols: raise RuntimeError('No ELF function symbols')
+          symbols.sort(); offsets=[item[0] for item in symbols]
+          resolved=[]
+          for address in rvas:
+              index=bisect.bisect_right(offsets,address)-1
+              if index<0: raise RuntimeError('Address precedes function table')
+              start,name=symbols[index]
+              resolved.append({'rva':hex(address),'symbol_rva':hex(start),'offset':hex(address-start),'symbol':name})
+          (logs/'resolved.json').write_text(json.dumps({'diagnostic_only':True,'engine_runtime_verified':False,
+              'executable_sha256':before,'unchanged':sha(exe)==before,'functions':len(symbols),'frames':resolved},indent=2)+'\n')
+          print(json.dumps(resolved,indent=2))
+      - name: Save diagnostics without native SDK claims
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-symbol-diagnostic-${{ matrix.os }}-${{ github.run_id }}
+          path: |
+            symbol-diagnostics/
+            static-diagnostics/resume/*.json
+          if-no-files-found: warn
+          retention-days: 7
