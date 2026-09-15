@@ -1,0 +1,76 @@
+name: Diagnose native CEF Windows startup (not SDK validation)
+on:
+  push:
+    branches: [static-engine]
+    paths: ['tools/cef_runtime_debugger.cc', '.github/workflows/windows-runtime-diagnostic.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  runtime-diagnostic:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Activate installed native compiler
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "Missing MSVC" }
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "MSVC activation failed" }
+      - name: Build and verify diagnostic launcher on a crashing fixture
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force runtime-diagnostics | Out-Null
+          cl /nologo /std:c++17 /EHsc /MT /Zi /Od /W4 /WX tools/cef_runtime_debugger.cc /Fe:runtime-diagnostics/debugger.exe
+          if ($LASTEXITCODE -ne 0) { throw "Debugger compile failed" }
+          '#include <windows.h>' + "`n" + '__declspec(noinline) void crash_marker(void){OutputDebugStringA("EXPECTED_NATIVE_FIXTURE");DebugBreak();} int main(void){crash_marker();return 0;}' | Set-Content runtime-diagnostics/fixture.c
+          cl /nologo /MT /Zi /Od runtime-diagnostics/fixture.c /Fe:runtime-diagnostics/fixture.exe
+          if ($LASTEXITCODE -ne 0) { throw "Fixture compile failed" }
+          & runtime-diagnostics/debugger.exe "$pwd\runtime-diagnostics\fixture.exe" > runtime-diagnostics/fixture.log 2>&1
+          if ($LASTEXITCODE -ne 1) { throw "Diagnostic incorrectly accepted crash" }
+          $log = Get-Content -Raw runtime-diagnostics/fixture.log
+          if ($log -notmatch 'crash_marker' -or $log -notmatch 'EXCEPTION code=0x80000003' -or $log -notmatch 'EXPECTED_NATIVE_FIXTURE') { throw "Missing diagnostic evidence" }
+          exit 0
+      - name: Restore exact completed-link producer without changing sources
+        run: python vcpkg/static/resume_checkpoint.py restore --checkpoint-run 34945553735
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Diagnose the original executable with matching local PDB
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, shutil, subprocess
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-static/download/chromium/src/out/CEF_Static_Release_x64'
+          deploy = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-startup-diagnostic'
+          deploy.mkdir()
+          exe = out/'cef_static_smoke.exe'
+          if hashlib.file_digest(exe.open('rb'), 'sha256').hexdigest() != '4713813216ac26efe1160eef941fdc37e227a26186912e31ce110ebba7523a5f':
+              raise RuntimeError('Not the audited failing executable')
+          for name in ('cef_static_smoke.exe', 'cef_static_smoke.exe.pdb', 'icudtl.dat', 'resources.pak', 'chrome_100_percent.pak', 'chrome_200_percent.pak', 'snapshot_blob.bin', 'v8_context_snapshot.bin'):
+              if (out/name).exists(): shutil.copy2(out/name, deploy/name)
+          if (out/'locales').exists(): shutil.copytree(out/'locales', deploy/'locales')
+          logs = root/'runtime-diagnostics'
+          try:
+              with (logs/'cef-startup.log').open('w', encoding='utf-8') as stream:
+                  result = subprocess.run([root/'runtime-diagnostics/debugger.exe', deploy/'cef_static_smoke.exe'], stdout=stream, stderr=subprocess.STDOUT, timeout=240)
+              (logs/'diagnostic-result.json').write_text(json.dumps({'diagnostic_only': True, 'engine_runtime_verified': False, 'debugger_exit_code':result.returncode})+'\n')
+          finally:
+              for path in deploy.glob('*.log'): shutil.copy2(path, logs/path.name)
+          if result.returncode != 0: raise RuntimeError('Native CEF startup still failed; see exception stack')
+      - name: Preserve exception stacks even when the native executable fails
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-startup-diagnostic-${{ github.run_id }}
+          path: |
+            runtime-diagnostics/*.log
+            runtime-diagnostics/*.json
+            static-diagnostics/resume/*.json
+          if-no-files-found: warn
+          retention-days: 7
