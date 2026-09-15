@@ -2,22 +2,24 @@
   "schema": 1,
   "migrations": [
     {
-      "id": "skia-x11-fallback-v1",
+      "id": "windows-auditor-tools-v1",
       "platform": "windows-x64",
-      "from_recipe": "2212cb434af19741fea0b66c9b20bfe46a346cad57a821278bea3c300ed5ffb7",
-      "to_recipe": "e77d2720e6ae109f3906e911a063766dd57ca0a478b422fccbbdd6f068f87944",
-      "producer_run": 34885160067,
+      "from_recipe": "e77d2720e6ae109f3906e911a063766dd57ca0a478b422fccbbdd6f068f87944",
+      "to_recipe": "89d6b67c546e750f971874f56fc88e754abdfd8da0b44c0e0a099c1e33a6b52a",
+      "producer_run": 34945553735,
       "producer_attempt": 1,
-      "producer_sha": "da7026ade7a88e5e681a86cfe0bb888b56660fac"
+      "producer_sha": "093a171ebb91e8ccecfbb02db618a3d73b17e614",
+      "source_upgrade_required": false
     },
     {
-      "id": "skia-x11-fallback-v1",
+      "id": "windows-auditor-tools-v1",
       "platform": "linux-x64",
-      "from_recipe": "10c69605d10bb59d9c02e983a37dc5a4af07623da6c495276aa8e61786c24e7b",
-      "to_recipe": "22fb8bbcb10aa15a36ffc9ace4234dcee2dab2cd88ae0d088d7c79e048b00c6f",
-      "producer_run": 34844924690,
+      "from_recipe": "22fb8bbcb10aa15a36ffc9ace4234dcee2dab2cd88ae0d088d7c79e048b00c6f",
+      "to_recipe": "5a2cad081b7ed15fa3d853da7dc0e2b3cd1b14d88c2f2b32255f43f15d9deb95",
+      "producer_run": 34945553735,
       "producer_attempt": 1,
-      "producer_sha": "a093e9cdbd7f1096c9026bae0869d36836c01026"
+      "producer_sha": "093a171ebb91e8ccecfbb02db618a3d73b17e614",
+      "source_upgrade_required": false
     }
   ]
 }

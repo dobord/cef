@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -277,6 +278,104 @@ def find_binary(source: Path, names: list[str]) -> Path:
     raise FileNotFoundError(f'None of the pinned tool locations exists: {names}')
 
 
+
+# Windows Chromium's main clang archive omits llvm-readobj. The auxiliary
+# objdump package is pinned by the same upstream update.py, not by host PATH.
+WINDOWS_AUDIT_VERSION = 'llvmorg-23-init-19482-g53d18800-1'
+CLANG_UPDATE_BLOB = '9cf9371c34f55f06c62eeff23fa33346202e0825'
+CLANG_DOWNLOAD_ORIGIN = 'https://commondatastorage.googleapis.com/chromium-browser-clang'
+
+
+def ensure_windows_readobj(source: Path, work: Path, logs: Path) -> Path:
+    """Acquire validation-only tools without touching the compiler installation.
+
+    Run a byte-verified copy of the pinned upstream installer in an isolated
+    directory: update.py can otherwise delete first-class GCS markers or old
+    compiler stamps even for an auxiliary package. Never use an arbitrary LLVM
+    from PATH, suppress a failed acquisition, or accept an incomplete cache.
+    """
+    if not WINDOWS:
+        raise RuntimeError('Windows PE audit tools require a native Windows host')
+    (logs/'windows-audit-tool.json').unlink(missing_ok=True)
+    override = os.environ.get('CDS_CLANG_BUCKET_OVERRIDE')
+    if override is not None and override != CLANG_DOWNLOAD_ORIGIN:
+        raise RuntimeError('Unreviewed clang download origin for Windows audit tools')
+    source, work, logs = source.resolve(), work.resolve(), logs.resolve()
+    updater = source/'tools/clang/scripts/update.py'
+    data = updater.read_bytes().replace(b'\r\n', b'\n')
+    blob = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+    if blob != CLANG_UPDATE_BLOB:
+        raise RuntimeError('Pinned clang audit installer Git blob mismatch')
+    work.mkdir(parents=True, exist_ok=True)
+    logs.mkdir(parents=True, exist_ok=True)
+    target = work/('windows-audit-' + WINDOWS_AUDIT_VERSION)
+    readobj = target/'bin/llvm-readobj.exe'
+    expected = {'schema': 1, 'package': 'objdump', 'host': 'win',
+                'version': WINDOWS_AUDIT_VERSION, 'updater_blob': CLANG_UPDATE_BLOB}
+
+    def validate(folder: Path, cached: bool) -> dict:
+        binary = folder/'bin/llvm-readobj.exe'
+        stamp = folder/'objdump_revision'
+        if (folder.is_symlink() or (folder/'bin').is_symlink() or binary.is_symlink()
+                or stamp.is_symlink() or not binary.is_file() or not stamp.is_file()):
+            raise RuntimeError('Incomplete or redirected Windows audit tool package')
+        if stamp.read_text(encoding='utf-8').strip() != WINDOWS_AUDIT_VERSION:
+            raise RuntimeError('Windows audit tool package stamp mismatch')
+        with binary.open('rb') as stream:
+            if stream.read(2) != b'MZ':
+                raise RuntimeError('Windows audit tool is not a PE executable')
+        receipt = dict(expected, executable_sha256=digest(binary))
+        if cached:
+            path = folder/'cef-audit-tool.json'
+            if path.is_symlink() or not path.is_file() or json.loads(path.read_text(encoding='utf-8')) != receipt:
+                raise RuntimeError('Windows audit tool cache identity or hash mismatch')
+        return receipt
+
+    if target.exists() or target.is_symlink():
+        receipt = validate(target, True)
+    else:
+        # TemporaryDirectory only owns this new staging area, never source data.
+        with tempfile.TemporaryDirectory(prefix='cef-audit-acquire-', dir=work) as tmp:
+            staging = Path(tmp)
+            installer = staging/'installer/tools/clang/scripts/update.py'
+            installer.parent.mkdir(parents=True)
+            installer.write_bytes(data)
+            package = staging/'package'
+            run_network(python_script(installer, '--package=objdump', '--host-os=win',
+                                     '--output-dir=' + str(package)),
+                        staging, logs, 'windows-audit-download', timeout=900)
+            receipt = validate(package, False)
+            (package/'cef-audit-tool.json').write_text(
+                json.dumps(receipt, indent=2)+'\n', encoding='utf-8')
+            package.rename(target)
+    version = run([readobj, '--version'], work, logs, 'windows-audit-version', timeout=30)
+    if not re.search(r'\bLLVM version 23\.', version):
+        raise RuntimeError('Unexpected llvm-readobj executable version')
+    (logs/'windows-audit-tool.json').write_text(json.dumps(dict(receipt,
+        executable=str(readobj), version_output=version.strip(),
+        engine_runtime_verified=False), indent=2)+'\n', encoding='utf-8')
+    return readobj
+
+
+def audit_windows_binary(source: Path, work: Path, logs: Path, executable: Path,
+                         name: str = 'binary-imports') -> None:
+    (logs/(name+'-proof.json')).unlink(missing_ok=True)
+    readobj = ensure_windows_readobj(source, work, logs)
+    imports = run([readobj, '--file-headers', '--coff-imports', '--coff-load-config', executable],
+                  executable.parent, logs, name, timeout=120)
+    # A successful empty/misrouted invocation must not certify a PE import audit.
+    if (not re.search(r'^Format: COFF-x86-64\s*$', imports, re.M)
+            or not re.search(r'^Arch: x86_64\s*$', imports, re.M)
+            or not re.search(r'^(?:Delay)?Import \{', imports, re.M)):
+        raise RuntimeError('Missing x64 PE headers or import descriptors in audit output')
+    verify_binary_imports(imports, True)
+    (logs/(name+'-proof.json')).write_text(json.dumps({
+        'schema': 1, 'executable_sha256': digest(executable),
+        'auditor_sha256': digest(readobj), 'auditor_version': WINDOWS_AUDIT_VERSION,
+        'imports_verified': True, 'engine_runtime_verified': False,
+    }, indent=2)+'\n', encoding='utf-8')
+
+
 def gn_generate_command(gn: Path, out: Path) -> list[str | Path]:
     # root-target alone still defines unrelated targets from evaluated
     # BUILD.gn files. Restrict the graph to the static executable closure.
@@ -494,6 +593,8 @@ def execute_smoke(exe: Path, logs: Path) -> dict:
 def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
     # An unsuccessful retry must not leave a previous success receipt behind.
     (logs/'engine-build-receipt.json').unlink(missing_ok=True)
+    if WINDOWS:
+        ensure_windows_readobj(source, work, logs)
     out = configuration(source, logs)
     ninja = find_binary(source, ['third_party/ninja/ninja.exe'] if WINDOWS else ['third_party/ninja/ninja'])
     run([ninja, '-C', out, '-j', str(jobs), '-d', 'keeprsp', 'cef_static_smoke'],
@@ -510,13 +611,11 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
     if (out/'locales').exists():
         shutil.copytree(out/'locales', deploy/'locales')
     if WINDOWS:
-        readobj = find_binary(source, ['third_party/llvm-build/Release+Asserts/bin/llvm-readobj.exe'])
-        imports = run([readobj, '--coff-imports', '--coff-load-config', deploy/exe.name],
-                      source, logs, 'binary-imports')
+        audit_windows_binary(source, work, logs, deploy/exe.name)
     else:
         imports = run(['readelf', '-d', deploy/exe.name], source, logs, 'binary-imports')
         run(['ldd', deploy/exe.name], source, logs, 'runtime-libraries')
-    verify_binary_imports(imports, WINDOWS)
+        verify_binary_imports(imports, False)
     proof = execute_smoke(deploy/exe.name, logs)
     receipt = {'schema': 1, 'cef_commit': CEF, 'chromium_commit': CHROMIUM,
                'depot_tools_commit': DEPOT, 'platform': platform.platform(),
@@ -552,6 +651,8 @@ def main() -> None:
         return
     source = prepare(work, logs)
     if args.phase in ('check', 'regressions'):
+        if WINDOWS:
+            ensure_windows_readobj(source, work, logs)
         out = configuration(source, logs)
         if args.phase == 'regressions':
             # Object targets can depend on almost the entire engine through

@@ -82,11 +82,8 @@ def main() -> None:
         # source-workspace runtime fallback can make this test accidentally pass.
         original_source = work/'download'
         if WINDOWS:
-            readobj = build.find_binary(original_source/'chromium/src', [
-                'third_party/llvm-build/Release+Asserts/bin/llvm-readobj.exe'])
-            imports = run([readobj, '--coff-imports', '--coff-load-config', executable],
-                          ROOT, 'external-binary-imports')
-            build.verify_binary_imports(imports, True)
+            build.audit_windows_binary(original_source/'chromium/src', work,
+                                       diagnostics, executable, 'external-binary-imports')
         with build.hidden_directories([sdk, original_source]):
             proof = build.execute_smoke(executable,diagnostics)
             if not WINDOWS:

@@ -100,10 +100,15 @@ class PhaseTests(unittest.TestCase):
              mock.patch.object(build, 'setup_environment'), \
              mock.patch.object(build, 'prepare', return_value=root/'source') as prepare, \
              mock.patch.object(build, 'configuration', return_value=root/'out') as configure, \
+             mock.patch.object(build, 'ensure_windows_readobj') as auditor, \
              mock.patch.object(build, 'compile_regressions') as regress, \
              mock.patch.object(build, 'compile_and_test') as native, \
              contextlib.redirect_stdout(io.StringIO()):
             build.main()
+            if build.WINDOWS and phase in ('check', 'regressions'):
+                auditor.assert_called_once()
+            else:
+                auditor.assert_not_called()
         return prepare, configure, regress, native
 
     def test_check_never_starts_native_compile(self):

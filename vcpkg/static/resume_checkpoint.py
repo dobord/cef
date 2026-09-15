@@ -248,7 +248,8 @@ def restore_main(mode: str, requested: str) -> None:
                                       input_identity, run, artifact)
             if migration is not None:
                 result.update(input_identity=input_identity, identity=identity,
-                    recipe_migration=migration, source_upgrade_required=True)
+                    recipe_migration=migration,
+                    source_upgrade_required=migration.get('source_upgrade_required', True))
         write_json(diagnostics/'restore.json', result)
         # Existing diagnostic consumers keep their established platform paths.
         legacy = 'linux-checkpoint' if platform == 'linux' else 'checkpoint'
