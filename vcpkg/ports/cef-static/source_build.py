@@ -303,6 +303,24 @@ def static_profile(merged: dict, windows: bool) -> dict:
     return result
 
 
+# Exact one-step source migration: do not rerun the whole non-idempotent patch set
+# or discard the already compiled workspace. Every other recipe change fails.
+X11_RECIPE_UPGRADES = {'4c71c50aa1ef6da3edfa14b65509deb9baaa50f96c884f41d4710ebb8191705e': '70ec22eabe090fe9381f48821983ef60eb1863f2fb8582e5aa6148ec14fcbd33', 'e1102bb26d5b0247c07f698aa937e344fdf5be7d5c8c7093de5ee2df14f874c6': '0eb3e71b998a2277568deaf90c7b73ec14ec201199b229a345aece07b1ca5db2'}
+
+
+def upgrade_x11_recipe(source: Path, logs: Path, previous: str, recipe: str) -> None:
+    if X11_RECIPE_UPGRADES.get(previous) != recipe:
+        raise RuntimeError('Patched workspace has another recipe; no reviewed migration')
+    run(python_script(HERE/'patch_source.py', source, '--upgrade-x11-fallback',
+                      '--receipt', logs/'x11-source-upgrade.json'),
+        source, logs, 'x11-source-upgrade')
+    marker = source/'cef-static-patched.json'
+    temporary = marker.with_suffix('.json.new')
+    temporary.write_text(json.dumps({'recipe': recipe, 'previous_recipe': previous,
+        'migration': 'skia-x11-fallback-v1'})+'\n', encoding='utf-8')
+    os.replace(temporary, marker)
+
+
 def configuration(source: Path, logs: Path) -> Path:
     cef = source/'cef'
     out = source/'out/CEF_Static_Release_x64'
@@ -310,8 +328,9 @@ def configuration(source: Path, logs: Path) -> Path:
                             (HERE/'smoke.c').read_bytes()).hexdigest()
     marker = source/'cef-static-patched.json'
     if marker.exists():
-        if json.loads(marker.read_text())['recipe'] != recipe:
-            raise RuntimeError('Patched workspace has another recipe; use a fresh workspace')
+        previous = json.loads(marker.read_text())['recipe']
+        if previous != recipe:
+            upgrade_x11_recipe(source, logs, previous, recipe)
     else:
         run(python_script(cef/'tools/version_manager.py', '-u', '--fast-check'),
             cef, logs, 'cef-translator')

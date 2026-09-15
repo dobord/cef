@@ -71,6 +71,41 @@ jobs:
         run: python -m unittest discover -s vcpkg/static/tests -v
       - name: Test cross-run selection and no-progress guards on both platforms
         run: python -m unittest discover -s vcpkg/static/tests -p test_resume_checkpoint.py -v
+      - name: Activate native Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH|VSINSTALLDIR|VCINSTALLDIR|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion|VSCMD_[^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+      - name: Fetch exact pinned Skia source for Dawn X11 regression
+        shell: python
+        run: |
+          import hashlib, os, pathlib, time, urllib.request
+          url = 'https://raw.githubusercontent.com/chromium/chromium/79460ebecaa5625e57a5fb679a735659e73dc687/components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.cc'
+          for attempt in range(3):
+              try:
+                  with urllib.request.urlopen(url, timeout=60) as response:
+                      data = response.read()
+                  break
+              except OSError:
+                  if attempt == 2: raise
+                  time.sleep(3)
+          if hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest() != 'd8485e68ef15f944a4d45facf2b6447a53412944':
+              raise RuntimeError('Pinned Skia source mismatch')
+          (pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-skia.cc').write_bytes(data)
+      - name: Test Skia guard and reviewed checkpoint migration
+        run: python -m unittest discover -s vcpkg/static/tests -p test_skia_resume.py -v
+        env:
+          CEF_PINNED_SKIA: ${{ runner.temp }}/cef-skia.cc
+      - name: Preserve Skia regression proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: skia-x11-regression-${{ matrix.os }}-${{ github.run_attempt }}
+          path: static-diagnostics/skia-x11-regression.json
+          if-no-files-found: warn
+          retention-days: 7
       - run: python -m compileall -q vcpkg/ports/cef-static vcpkg/static
   checkpoint-preflight:
     needs: contract
@@ -184,7 +219,7 @@ jobs:
         if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: python vcpkg/static/linux_slice.py
       - name: Persist Ubuntu progress before validation or runner shutdown
-        if: steps.linux_iteration.outputs.checkpoint_ready == 'true'
+        if: ${{ !cancelled() && steps.linux_iteration.outputs.checkpoint_ready == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ steps.linux_checkpoint.outputs.artifact_name }}
@@ -193,7 +228,7 @@ jobs:
           retention-days: 3
           if-no-files-found: error
       - name: Require measurable progress after checkpoint upload
-        if: steps.iteration.outputs.checkpoint_ready == 'true' || steps.linux_iteration.outputs.checkpoint_ready == 'true'
+        if: ${{ !cancelled() && (steps.iteration.outputs.checkpoint_ready == 'true' || steps.linux_iteration.outputs.checkpoint_ready == 'true') }}
         env:
           CEF_ITERATION_READY: ${{ steps.iteration.outputs.ready || steps.linux_iteration.outputs.ready || 'false' }}
         run: python vcpkg/static/resume_checkpoint.py audit-after

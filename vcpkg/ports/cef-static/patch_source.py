@@ -92,10 +92,36 @@ def patch_gpu_init_filter_set(root: Path) -> None:
             '#if BUILDFLAG(ENABLE_VULKAN)\n')
 
 
+# The pinned file is not modified by the upstream CEF patch set.
+X11_FILE = 'components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.cc'
+X11_ORIGINAL_BLOB = 'd8485e68ef15f944a4d45facf2b6447a53412944'
+X11_OLD = '#if BUILDFLAG(ENABLE_VULKAN)\n// Returns whether SkiaOutputDeviceX11 can be instantiated on this platform.\nbool MayFallBackToSkiaOutputDeviceX11() {\n#if BUILDFLAG(IS_OZONE)\n  return ui::OzonePlatform::GetInstance()\n      ->GetPlatformProperties()\n      .skia_can_fall_back_to_x11;\n#else\n  return false;\n#endif  // BUILDFLAG(IS_OZONE)\n}\n#endif  // BUILDFLAG(ENABLE_VULKAN)\n'
+X11_NEW = '#if BUILDFLAG(ENABLE_VULKAN) || \\\n    (BUILDFLAG(SKIA_USE_DAWN) && BUILDFLAG(SUPPORTS_OZONE_X11))\n// Returns whether SkiaOutputDeviceX11 can be instantiated on this platform.\nbool MayFallBackToSkiaOutputDeviceX11() {\n#if BUILDFLAG(IS_OZONE)\n  return ui::OzonePlatform::GetInstance()\n      ->GetPlatformProperties()\n      .skia_can_fall_back_to_x11;\n#else\n  return false;\n#endif  // BUILDFLAG(IS_OZONE)\n}\n#endif  // Vulkan or Dawn/X11 fallback\n'
+
+
+def patch_skia_x11_fallback(root: Path) -> None:
+    """Match the union of the two callers, without enabling Vulkan or disabling Dawn.
+
+    Idempotence is limited to this exact pinned transformation so an interrupted
+    marker upgrade can be retried without reapplying unrelated source patches.
+    """
+    path = root / X11_FILE
+    text = path.read_text(encoding='utf-8')
+    already = text.count(X11_NEW) == 1 and X11_OLD not in text
+    original = text.replace(X11_NEW, X11_OLD, 1) if already else text
+    data = original.encode('utf-8')
+    blob = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+    if blob != X11_ORIGINAL_BLOB or original.count(X11_OLD) != 1:
+        raise RuntimeError('Pinned Skia X11 fallback source/context mismatch')
+    if not already:
+        replace(root, X11_FILE, X11_OLD, X11_NEW)
+
+
 def patch(root: Path) -> None:
     patch_vulkan_disabled(root)
     patch_dawn_ozone_dependencies(root)
     patch_gpu_init_filter_set(root)
+    patch_skia_x11_fallback(root)
     replace(root, 'cef/libcef/features/features.gni', '  enable_cef = true\n',
             '  enable_cef = true\n\n  # Build an engine archive, without the DLL-wrapper ABI boundary.\n  cef_static_engine = false\n')
     replace(root, 'cef/include/internal/cef_export.h', '#if defined(COMPILER_MSVC)\n',
@@ -264,8 +290,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('source', type=Path)
     parser.add_argument('--receipt', type=Path, required=True)
+    parser.add_argument('--upgrade-x11-fallback', action='store_true')
     args = parser.parse_args()
-    patch(args.source.resolve())
+    if args.upgrade_x11_fallback:
+        patch_skia_x11_fallback(args.source.resolve())
+    else:
+        patch(args.source.resolve())
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps({'schema': 1, 'edits': EDITS}, indent=2)+'\n')
     print(f'Applied {len(EDITS)} checked static-engine source edits')

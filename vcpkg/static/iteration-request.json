@@ -1,6 +1,10 @@
 {
   "schema": 1,
-  "sequence": 3,
+  "sequence": 4,
   "mode": "resume",
-  "checkpoint_run": "34844924690"
+  "checkpoint_run": "",
+  "checkpoint_runs": {
+    "windows": "34885160067",
+    "linux": "34844924690"
+  }
 }

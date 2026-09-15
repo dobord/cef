@@ -126,6 +126,30 @@ def verify_stable(run: dict, repo: str, api=shared.gh_json) -> None:
         raise ValueError('Producer was re-run or changed during download; checkpoint not restored')
 
 
+def checkpoint_input_identity(identity: dict, run: dict) -> tuple[dict, dict | None]:
+    """Only the committed, exact one-step migration may consume an old recipe.
+
+    Work path, image, branch, repository, archive schema and POSIX policy are NOT
+    relaxed. Missing artifacts still fail; this is not a search/downgrade loop.
+    """
+    path = ROOT/'vcpkg/static/checkpoint-migrations.json'
+    document = json.loads(path.read_text(encoding='utf-8'))
+    if document.get('schema') != 1 or not isinstance(document.get('migrations'), list):
+        raise ValueError('Invalid checkpoint migration ledger')
+    matches = [m for m in document['migrations'] if
+        m['platform'] == identity['platform'] and m['to_recipe'] == identity['recipe']
+        and m['producer_run'] == run['id'] and m['producer_sha'] == run['head_sha']
+        and m['producer_attempt'] == run['run_attempt']]
+    if len(matches) > 1:
+        raise ValueError('Ambiguous checkpoint migration')
+    if not matches:
+        return identity, None
+    migration = matches[0]
+    if not re.fullmatch(r'[0-9a-f]{64}', migration['from_recipe']):
+        raise ValueError('Invalid old recipe digest')
+    return dict(identity, recipe=migration['from_recipe']), migration
+
+
 def restore_selected(adapter, work: Path, package: Path, identity: dict, run: dict,
                      artifact: dict, *, api=shared.gh_json, download=subprocess.run) -> dict:
     if package.exists() or (work.exists() and any(work.iterdir())):
@@ -181,8 +205,17 @@ def push_request(mode: str, requested: str) -> tuple[str, str, bool]:
             or request['sequence'] < 1 or request.get('mode') not in ('resume', 'fresh')
             or not isinstance(request.get('checkpoint_run'), str)):
         raise ValueError('Invalid committed iteration-request.json')
+    per_platform = request.get('checkpoint_runs', {})
+    if (not isinstance(per_platform, dict) or set(per_platform) - {'linux', 'windows'}
+            or (per_platform and set(per_platform) != {'linux', 'windows'})):
+        raise ValueError('checkpoint_runs must pin both native platforms')
+    for value in per_platform.values():
+        positive_id(value, 'platform checkpoint run')
+    if per_platform and (request['checkpoint_run'] or request['mode'] != 'resume'):
+        raise ValueError('Ambiguous platform checkpoint request')
+    platform = 'windows' if os.name == 'nt' else 'linux'
     mode = request['mode']
-    requested = requested or request['checkpoint_run']
+    requested = requested or per_platform.get(platform, request['checkpoint_run'])
     return mode, requested, mode == 'fresh'
 
 
@@ -206,12 +239,16 @@ def restore_main(mode: str, requested: str) -> None:
             result = {'status': 'explicit-fresh', 'identity': identity, 'engine_runtime_verified': False}
         else:
             run = choose_run(identity, positive_id(os.environ['GITHUB_RUN_ID'], 'GITHUB_RUN_ID'), requested)
-            artifact = choose_artifact(identity, run, adapter.artifact_name(identity))
+            input_identity, migration = checkpoint_input_identity(identity, run)
+            artifact = choose_artifact(input_identity, run, adapter.artifact_name(input_identity))
             write_json(diagnostics/'selection.json', {'status': 'selected', 'mode': mode,
                        'identity': identity, 'producer_run': run['id'], 'producer_attempt': run['run_attempt'],
                        'artifact_id': artifact['id'], 'artifact_name': artifact['name']})
             result = restore_selected(adapter, work, Path(os.environ['RUNNER_TEMP'])/'cef-resume-download',
-                                      identity, run, artifact)
+                                      input_identity, run, artifact)
+            if migration is not None:
+                result.update(input_identity=input_identity, identity=identity,
+                    recipe_migration=migration, source_upgrade_required=True)
         write_json(diagnostics/'restore.json', result)
         # Existing diagnostic consumers keep their established platform paths.
         legacy = 'linux-checkpoint' if platform == 'linux' else 'checkpoint'
