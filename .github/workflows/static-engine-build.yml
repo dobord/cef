@@ -101,6 +101,12 @@ jobs:
         run: python -m unittest discover -s vcpkg/static/tests -p test_skia_resume.py -v
         env:
           CEF_PINNED_SKIA: ${{ runner.temp }}/cef-skia.cc
+      - name: Prepare exact upstream runtime regression sources
+        run: python vcpkg/static/prepare_runtime_fixture.py --destination "${{ runner.temp }}/cef-runtime-pinned"
+      - name: Test allocator-safe seeding and Linux self-exec assets
+        run: python -m unittest discover -s vcpkg/static/tests -p test_runtime_startup.py -v
+        env:
+          CEF_PINNED_RUNTIME: ${{ runner.temp }}/cef-runtime-pinned
       - name: Preserve Skia regression proof
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

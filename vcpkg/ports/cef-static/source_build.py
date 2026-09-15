@@ -417,6 +417,9 @@ def configuration(source: Path, logs: Path) -> Path:
         marker.write_text(json.dumps({'recipe': recipe})+'\n')
     # Supplemental GN correction is verified and idempotent. Preserve the
     # existing base patch marker and all source/object timestamps otherwise.
+    run(python_script(HERE/'runtime_startup.py', '--source', source,
+                      '--receipt', logs/'native-startup-patches.json'),
+        source, logs, 'native-startup-patches')
     run(python_script(HERE/'skia_x11_link.py', '--source', source,
                       '--receipt', logs/'skia-x11-link.json'),
         source, logs, 'skia-x11-link')
@@ -578,6 +581,26 @@ def execute_smoke(exe: Path, logs: Path) -> dict:
     return proof
 
 
+
+def stage_runtime_data(out: Path, deploy: Path, logs: Path) -> None:
+    """Stage data only; a missing ICU file is an error before process startup."""
+    receipt = logs/'runtime-data.json'
+    receipt.unlink(missing_ok=True)
+    icu = out/'icudtl.dat'
+    if not icu.is_file() or icu.stat().st_size == 0:
+        raise RuntimeError('Required ICU runtime data is missing or empty: '+str(icu))
+    for name in ('icudtl.dat', 'resources.pak', 'chrome_100_percent.pak',
+                 'chrome_200_percent.pak', 'snapshot_blob.bin', 'v8_context_snapshot.bin'):
+        if (out/name).exists():
+            shutil.copy2(out/name, deploy/name)
+    if (out/'locales').exists():
+        shutil.copytree(out/'locales', deploy/'locales')
+    files = [{'path': p.relative_to(deploy).as_posix(), 'bytes': p.stat().st_size,
+              'sha256': digest(p)} for p in sorted(deploy.rglob('*'))
+             if p.is_file() and p.suffix != '.exe' and p.name != 'cef_static_smoke']
+    receipt.write_text(json.dumps({'schema': 1, 'files': files,
+        'engine_runtime_verified': False}, indent=2)+'\n', encoding='utf-8')
+
 def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
     # An unsuccessful retry must not leave a previous success receipt behind.
     (logs/'engine-build-receipt.json').unlink(missing_ok=True)
@@ -591,13 +614,8 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
     deploy = Path(tempfile.mkdtemp(prefix='static-deploy-', dir=work))
     exe = out/('cef_static_smoke.exe' if WINDOWS else 'cef_static_smoke')
     shutil.copy2(exe, deploy/exe.name)
-    # Only data, never DLL/SO files. Missing required data must fail the smoke.
-    for name in ('icudtl.dat', 'resources.pak', 'chrome_100_percent.pak',
-                 'chrome_200_percent.pak', 'snapshot_blob.bin', 'v8_context_snapshot.bin'):
-        if (out/name).exists():
-            shutil.copy2(out/name, deploy/name)
-    if (out/'locales').exists():
-        shutil.copytree(out/'locales', deploy/'locales')
+    # No DLL/SO fallback; record exactly which data files the app receives.
+    stage_runtime_data(out, deploy, logs)
     if WINDOWS:
         audit_windows_binary(source, work, logs, deploy/exe.name)
     else:
