@@ -42,6 +42,14 @@ int main(int argc, char** argv) {
   if (argc != 2) return 2;
   using Tracer = base::internal::InstanceTracer;
   const uintptr_t address = 0x1000;
+  // NoDestructor keeps an empty storage map alive. MSVC allocates its head
+  // sentinel separately; other standard libraries may embed it. Establish
+  // that implementation's empty-map baseline instead of calling it a leak.
+  Tracer::TraceImpl(42, false, address);
+  Tracer::UntraceImpl(42);
+  PA_CHECK(Tracer::GetStackTracesForDanglingRefs(address).empty());
+  const unsigned baseline_allocs = internal_allocs.load();
+  const unsigned baseline_frees = internal_frees.load();
   Tracer::TraceImpl(1, false, address);
   Tracer::TraceImpl(2, true, address);
   Tracer::TraceImpl(3, false, 0x2000);
@@ -86,8 +94,11 @@ int main(int argc, char** argv) {
   }
   hook_mask = 0;
   for (uint64_t owner = 1; owner <= 4; ++owner) Tracer::UntraceImpl(owner);
+  std::printf("EMPTY_STORAGE baseline_allocs=%u baseline_frees=%u allocs=%u frees=%u\n",
+              baseline_allocs, baseline_frees, internal_allocs.load(), internal_frees.load());
 #ifdef EXPECT_INTERNAL_ALLOCATOR
-  PA_CHECK(internal_allocs > 0 && internal_allocs == internal_frees);
+  PA_CHECK(internal_allocs > baseline_allocs && internal_frees >= baseline_frees);
+  PA_CHECK(internal_allocs - baseline_allocs == internal_frees - baseline_frees);
 #endif
   std::printf("PASS %s hooks=%u internal_allocs=%u internal_frees=%u\n", argv[1],
               hook_calls.load(), internal_allocs.load(), internal_frees.load());
