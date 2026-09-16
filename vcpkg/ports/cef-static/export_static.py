@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Callable
 
 CEF_COMMIT = '708dc140cbc3286826a8abef89dc23a44ff9ea72'
@@ -44,6 +45,120 @@ def run(args: list[str | Path], cwd: Path, *, stdin: str | None = None) -> str:
     if result.returncode:
         raise RuntimeError(f'Export command failed: {command}\n{result.stdout[-20000:]}')
     return result.stdout
+
+
+def regular_archive_payloads(path: Path) -> list[tuple[int, str]]:
+    """Hash stored COFF member payloads in physical order, excluding ar indexes.
+
+    Do not extract names or follow member paths. This verifies that a purported
+    ordinary archive really stores every expected object, not just its headers.
+    The format accepted here is the COFF/GNU ar layout emitted by llvm-lib.
+    """
+    result = []
+    with path.open('rb') as stream:
+        if stream.read(8) != b'!<arch>\n':
+            raise RuntimeError('Expected a self-contained regular archive: '+str(path))
+        while header := stream.read(60):
+            if len(header) != 60 or header[58:] != b'`\n':
+                raise RuntimeError('Truncated or invalid archive member header')
+            field = header[48:58].strip()
+            if not field or not field.isdigit():
+                raise RuntimeError('Invalid archive member size')
+            size = int(field)
+            name = header[:16].rstrip(b' ')
+            if not name or name.startswith(b'#1/'):
+                raise RuntimeError('Unsupported output archive member name format')
+            internal = name in (b'/', b'//', b'/SYM64/')
+            digest = hashlib.sha256()
+            remaining = size
+            while remaining:
+                data = stream.read(min(remaining, 1024 * 1024))
+                if not data:
+                    raise RuntimeError('Truncated archive member payload')
+                if not internal:
+                    digest.update(data)
+                remaining -= len(data)
+            if size % 2 and stream.read(1) != b'\n':
+                raise RuntimeError('Invalid archive member padding')
+            if not internal:
+                result.append((size, digest.hexdigest()))
+    return result
+
+
+def materialize_windows_thin_archive(ar: Path, path: Path, dest: Path,
+                                      source: Path, diagnostics: Path) -> dict:
+    """Materialize through explicit object inputs, never archive recursion.
+
+    Pinned LLVM 53d18800 LibDriver.cpp destroys its local Archive (and the
+    ThinBuffers it owns) before writeArchive consumes member MemoryBufferRefs.
+    /LIST only reads headers. Passing its objects as top-level inputs keeps
+    their buffers alive in libDriverMain::MBs. /LIST and the writer both reverse
+    order, so the physical member order of the original archive is preserved.
+    """
+    source, path, dest = source.resolve(), path.resolve(), dest.resolve()
+    if not path.is_relative_to(source) or not path.is_file():
+        raise RuntimeError('Thin archive is outside the source workspace')
+    if dest.exists():
+        raise RuntimeError('Refusing to overwrite an existing export archive')
+    with path.open('rb') as stream:
+        if stream.read(8) != b'!<thin>\n':
+            raise RuntimeError('Expected a Windows thin archive')
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    proof_path = diagnostics/(dest.stem+'-materialization.json')
+    proof_path.unlink(missing_ok=True)
+    archive_hash = sha256(path)
+    listing = run([ar, '/lib', '/nologo', '/list', path], path.parent)
+    members, inventory, seen = [], [], set()
+    # splitlines() would interpret valid but ambiguous control characters as
+    # separators. Accept only line endings emitted by the pinned tool.
+    names = listing.replace('\r\n', '\n').split('\n')
+    if names and names[-1] == '':
+        names.pop()
+    for name in names:
+        if (not name or any(ord(c) < 32 for c in name) or '"' in name
+                or name.startswith('@')):
+            raise RuntimeError('Ambiguous thin-archive member listing')
+        member = (path.parent/name).resolve()
+        if (not member.is_relative_to(source) or not member.is_file()
+                or member.suffix.lower() not in ('.obj', '.o', '.bc', '.res')
+                or FORBIDDEN.search(name)):
+            raise RuntimeError('Unresolved or unsupported thin-archive member: '+name)
+        if member in seen:
+            raise RuntimeError('Duplicate resolved thin member would be de-duplicated')
+        seen.add(member)
+        with member.open('rb') as stream:
+            magic = stream.read(8)
+        if magic in (b'!<thin>\n', b'!<arch>\n') or magic[:2] == b'MZ':
+            raise RuntimeError('Nested archive or PE image is not a direct object')
+        members.append(member)
+        inventory.append({'source': member.relative_to(source).as_posix(),
+                          'size': member.stat().st_size, 'sha256': sha256(member)})
+    # Quoted absolute paths keep both the command line short and filenames
+    # containing spaces intact. No shell, PATH librarian or compiler update.
+    rsp = diagnostics/(dest.stem+'-members.rsp')
+    rsp.write_text(''.join(subprocess.list2cmdline([str(m)])+'\n' for m in members),
+                   encoding='utf-8')
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.cef-lib-', dir=dest.parent) as temporary:
+        output = Path(temporary)/'payload.lib'
+        command = [ar, '/lib', '/nologo', '/OUT:'+str(output)]
+        command += ['@'+str(rsp.resolve())] if members else ['/llvmlibempty']
+        run(command, path.parent)
+        expected = [(entry['size'], entry['sha256']) for entry in reversed(inventory)]
+        if regular_archive_payloads(output) != expected:
+            raise RuntimeError('Export archive lost, reordered or changed member payloads')
+        if sha256(path) != archive_hash:
+            raise RuntimeError('Source thin archive changed during export')
+        result = {'schema': 1, 'method': 'explicit-objects',
+                  'source_archive': path.relative_to(source).as_posix(),
+                  'source_archive_sha256': archive_hash,
+                  'output_archive': dest.name, 'output_sha256': sha256(output),
+                  'members': inventory, 'member_count': len(members),
+                  'member_order_and_bytes_verified': True,
+                  'sdk_external_consumer_verified': False}
+        os.replace(output, dest)
+    proof_path.write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
+    return result
 
 
 def query_link_inputs(query: str) -> list[str]:
@@ -262,7 +377,7 @@ def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
             magic = f.read(8)
         if magic == b'!<thin>\n':
             if windows:
-                run([ar, '/lib', '/nologo', '/OUT:'+str(dest), path], out)
+                materialize_windows_thin_archive(ar, path, dest, source, diagnostics)
             else:
                 run([ar, '-M'], out, stdin=f'CREATE "{dest.as_posix()}"\nADDLIB "{path.as_posix()}"\nSAVE\nEND\n')
         elif magic == b'!<arch>\n':

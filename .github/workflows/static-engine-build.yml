@@ -198,6 +198,11 @@ jobs:
         run: sudo "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}/download/chromium/src/build/install-build-deps.sh" --no-prompt --no-arm --no-chromeos-fonts
       - name: Check static graph and export options (no native compilation)
         run: python vcpkg/ports/cef-static/source_build.py check --work "${{ matrix.work_root || format('{0}/cef-static', runner.temp) }}" --logs static-diagnostics/configure
+      - name: Verify self-contained Windows archive export with pinned tools
+        if: runner.os == 'Windows'
+        env:
+          CEF_ARCHIVE_EXPORT_NATIVE: '1'
+        run: python -I -m unittest discover -s vcpkg/static/tests -p test_windows_archive_export.py -v
       - name: Preserve configuration evidence before the engine build
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
