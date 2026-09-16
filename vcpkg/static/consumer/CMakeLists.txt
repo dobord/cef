@@ -20,9 +20,6 @@ add_executable(cef_static_smoke "${_cef_static_smoke_source}")
 set_target_properties(cef_static_smoke PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
 if(MSVC)
     set_property(TARGET cef_static_smoke PROPERTY MSVC_RUNTIME_LIBRARY MultiThreaded)
-    # This fixed C-ABI fixture uses portable ISO C stdio, as in the GN build
-    # (_CRT_SECURE_NO_DEPRECATE). Keep /WX; do not export this to SDK clients.
-    target_compile_definitions(cef_static_smoke PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_options(cef_static_smoke PRIVATE /W4 /WX)
 else()
     target_compile_options(cef_static_smoke PRIVATE -Wall -Wextra -Werror)

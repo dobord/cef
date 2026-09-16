@@ -74,6 +74,9 @@ install(FILES fixture.h DESTINATION include)
         cls.source.parent.mkdir(parents=True)
         cls.source.write_text('''#include "fixture.h"
 #include <stdio.h>
+#if defined(_WIN32) && (!defined(_MT) || defined(_DLL))
+#error The consumer fixture must compile with the static MSVC runtime
+#endif
 int main(void) {
     FILE* data = fopen("fixture.dat", "rb");
     int value;
@@ -166,24 +169,6 @@ add_executable(smoke "${CEF_STATIC_SMOKE_SOURCE}")
                 _, result = self.configure(value, label)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('must name an existing absolute source file', result.stdout+result.stderr)
-
-    @unittest.skipUnless(WINDOWS, 'MSVC-specific ISO C stdio deprecation control')
-    def test_msvc_portable_stdio_requires_the_scoped_definition(self):
-        legacy = self.root/'legacy-stdio'; legacy.mkdir()
-        text = (CONSUMER/'CMakeLists.txt').read_text()
-        definition = '    target_compile_definitions(cef_static_smoke PRIVATE _CRT_SECURE_NO_WARNINGS)\n'
-        self.assertEqual(text.count(definition), 1)
-        (legacy/'CMakeLists.txt').write_text(text.replace(definition, ''))
-        build = legacy/'build'
-        self.command(['-S', str(legacy), '-B', str(build), *self.generator,
-                      '-DCMAKE_PREFIX_PATH='+str(self.sdk),
-                      '-DCEF_STATIC_SMOKE_SOURCE='+str(self.source)], 'legacy-stdio-configure')
-        result = self.command(['--build', str(build), '--config', 'Release'],
-                              'legacy-stdio-build', succeeds=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('C4996', result.stdout+result.stderr)
-        self.report['cases'].append({'case': 'legacy-stdio-control', 'expected_failure': True})
-        self.record()
 
     def test_path_list_is_not_silently_split(self):
         _, result = self.configure(self.source.as_posix()+';other.c', 'path-list')
