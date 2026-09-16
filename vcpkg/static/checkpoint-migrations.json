@@ -2,23 +2,23 @@
   "schema": 1,
   "migrations": [
     {
-      "id": "instance-tracer-no-hooks-v1",
+      "id": "windows-compact-link-v1",
       "platform": "windows-x64",
-      "from_recipe": "f9c0f52786358ef978ff732094fa6341dc2724528a4d095054f893d98743a9c3",
-      "to_recipe": "523d8196bc4448be2bbfdb21edb71d8b55af940e2cf1eb2b80e89693ec38a9e6",
-      "producer_run": 35054794110,
+      "from_recipe": "523d8196bc4448be2bbfdb21edb71d8b55af940e2cf1eb2b80e89693ec38a9e6",
+      "to_recipe": "108b2abe572372208cb17c8f253227f38258e6e99b05c10936d17b5132cddf44",
+      "producer_run": 35080967654,
       "producer_attempt": 1,
-      "producer_sha": "1b31d3aa16d3953c2f12bf4e96667c88cc983143",
+      "producer_sha": "c24343798a53a2d8ac0f0a498f12492209649f33",
       "source_upgrade_required": false
     },
     {
-      "id": "instance-tracer-no-hooks-v1",
+      "id": "windows-compact-link-v1",
       "platform": "linux-x64",
-      "from_recipe": "68e0a08d3d8b1ee0a7a4f7d74a83170212ef14f23053682e9c2e240c48b07ab2",
-      "to_recipe": "c707853f3527f612eb2905ba190a4fdd729ba99af45a02601f19d0a46a6fcb45",
-      "producer_run": 35054794110,
+      "from_recipe": "c707853f3527f612eb2905ba190a4fdd729ba99af45a02601f19d0a46a6fcb45",
+      "to_recipe": "f92593b025ef027a687582744c113c10a4efe21715f3c20052e1f008adb2b53f",
+      "producer_run": 35080967654,
       "producer_attempt": 1,
-      "producer_sha": "1b31d3aa16d3953c2f12bf4e96667c88cc983143",
+      "producer_sha": "c24343798a53a2d8ac0f0a498f12492209649f33",
       "source_upgrade_required": false
     }
   ]

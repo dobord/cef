@@ -289,6 +289,42 @@ def verify_reference(receipt: dict) -> None:
         raise RuntimeError('Reference receipt has no separate renderer proof')
 
 
+def windows_archive_targets(names: list[str]) -> list[str]:
+    """Use unique archive basenames plus one search directory, not N long paths.
+
+    MSBuild puts AdditionalDependencies on one response-file line. The pinned
+    closure has thousands of archives; absolute paths exceed LINK's 131071-char
+    line limit. IMPORTED_LIBNAME keeps targets and lazy archive selection without
+    nesting response files (unsupported by MS LINK) or changing their contents.
+    """
+    if not names or any(not re.fullmatch(r'cef_[0-9]{4,}_[0-9a-f]{12}\.lib', name)
+                        for name in names):
+        raise RuntimeError('Invalid generated Windows archive basename')
+    if len(set(names)) != len(names):
+        raise RuntimeError('Duplicate generated Windows archive basename')
+    # Bound OUR contribution, reserving room for objects, resources, system
+    # libraries and consumer flags. Never truncate or silently drop a library.
+    characters = sum(len(name) + 3 for name in names)
+    if characters > 80 * 1024:
+        raise RuntimeError('Windows archive arguments exceed the reviewed 80 KiB budget')
+    lines = [f'set(CEF_STATIC_WINDOWS_ARCHIVE_ARGUMENT_CHARACTERS {characters})']
+    for index, name in enumerate(names):
+        target = f'CEF::archive_{index}'
+        path = '${_cef_static_prefix}/lib/cef-static/' + name
+        lines += [
+            f'if(NOT EXISTS "{path}" OR IS_DIRECTORY "{path}")',
+            f'  message(FATAL_ERROR "Missing cef-static archive: {name}")',
+            'endif()',
+            f'add_library({target} INTERFACE IMPORTED GLOBAL)',
+            f'set_property(TARGET {target} PROPERTY IMPORTED_LIBNAME "{name}")',
+            f'set_property(TARGET {target} PROPERTY INTERFACE_LINK_DIRECTORIES "${{_cef_static_prefix}}/lib/cef-static")',
+            # Make/Ninja need explicit file dependencies for name-based imports.
+            # MSBuild's native linker tracking resolves the same named inputs.
+            f'set_property(TARGET {target} PROPERTY INTERFACE_LINK_DEPENDS "{path}")',
+        ]
+    return lines
+
+
 def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
     windows = os.name == 'nt'
     receipt = json.loads((diagnostics/'engine-build-receipt.json').read_text())
@@ -370,6 +406,7 @@ def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
         cmake += ['add_library(CEF::objects STATIC IMPORTED GLOBAL)',
                   'set_property(TARGET CEF::objects PROPERTY IMPORTED_LOCATION "${_cef_static_prefix}/lib/cef-static/'+archive.name+'")']
     library_targets = []
+    windows_archive_names = []
     for index, path in enumerate(archives):
         name = f'cef_{index:04d}_'+hashlib.sha256(path.relative_to(source).as_posix().encode()).hexdigest()[:12]+suffix
         dest = lib/name
@@ -389,9 +426,13 @@ def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
                 raise RuntimeError(f'Non-relocatable/thin output archive: {dest}')
         target = f'CEF::archive_{index}'
         library_targets.append(target)
-        cmake += [f'add_library({target} STATIC IMPORTED GLOBAL)',
-                  f'set_property(TARGET {target} PROPERTY IMPORTED_LOCATION "${{_cef_static_prefix}}/lib/cef-static/{name}")']
+        if windows:
+            windows_archive_names.append(name)
+        else:
+            cmake += [f'add_library({target} STATIC IMPORTED GLOBAL)',
+                      f'set_property(TARGET {target} PROPERTY IMPORTED_LOCATION "${{_cef_static_prefix}}/lib/cef-static/{name}")']
     if windows:
+        cmake += windows_archive_targets(windows_archive_names)
         dependencies += library_targets
     else:
         dependencies.append('$<LINK_GROUP:RESCAN,'+','.join(library_targets)+'>')

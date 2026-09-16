@@ -81,6 +81,17 @@ jobs:
           cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
             if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH|VSINSTALLDIR|VCINSTALLDIR|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion|VSCMD_[^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
           }
+      - name: Verify full-size Windows SDK link arguments and relinking
+        id: windows-link-scale
+        run: python -m unittest discover -s vcpkg/static/tests -p test_windows_link_scale.py -v
+      - name: Preserve full-size native linker regression evidence
+        if: always() && runner.os == 'Windows' && steps.windows-link-scale.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-link-scale-${{ github.run_id }}-${{ github.run_attempt }}
+          path: static-diagnostics/windows-link-scale/
+          if-no-files-found: error
+          retention-days: 7
       - name: Test external consumer CMake paths with native link and run
         run: python -m unittest discover -s vcpkg/static/tests -p test_consumer_paths.py -v
       - name: Preserve native consumer path regression evidence
