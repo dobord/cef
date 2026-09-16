@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -126,13 +127,41 @@ class PackagingTests(unittest.TestCase):
         self.mutate_manifest(manifest, lambda d: d.update(receipt=pkg.file_record(receipt)))
         with self.assertRaisesRegex(ValueError, 'Inner and outer'): pkg.verify_bundle(manifest)
 
-    def test_special_paths_and_symlink_zip_metadata_rejected(self):
+    def test_unsafe_paths_and_case_colliding_manifest_rejected(self):
         for path in ('../file', '/abs', 'fixture-sdk/../file', 'fixture-sdk//file',
                      'fixture-sdk/a\\b', 'fixture-sdk/C:drive'):
             with self.assertRaises(ValueError): pkg.validate_entry(path, 'fixture-sdk')
-        (self.source/'LIBRARY.bin').write_bytes(b'case collision')
-        with self.assertRaises(ValueError): self.bundle()
-        self.assertFalse(self.output.exists())
+        # NTFS normally resolves LIBRARY.bin and library.bin to the same file.
+        # Model the ambiguous transport manifest directly on every platform.
+        manifest = self.bundle()
+        def add_collision(data):
+            duplicate = copy.deepcopy(next(e for e in data['entries']
+                                           if e['path'].endswith('/library.bin')))
+            duplicate['path'] = 'fixture-sdk/LIBRARY.bin'
+            data['entries'].append(duplicate)
+        self.mutate_manifest(manifest, add_collision)
+        with self.assertRaisesRegex(ValueError, 'Duplicate or case-colliding'):
+            pkg.verify_bundle(manifest)
+
+    def test_special_zip_member_metadata_is_rejected(self):
+        manifest = self.bundle(limit=65536)
+        data = pkg.read_json(manifest)
+        archive = self.output/data['archive']['name']
+        replacement = self.root/'replaced.zip'
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(replacement, 'w') as target:
+            for info in source.infolist():
+                payload = source.read(info)
+                if info.filename.endswith('/library.bin'):
+                    info.create_system = 3
+                    info.external_attr = (stat.S_IFLNK | 0o777) << 16
+                target.writestr(info, payload)
+        replacement.replace(archive)
+        # Refresh container hashes: only the unsafe member type must fail.
+        data['archive'] = pkg.file_record(archive)
+        data['parts'] = [pkg.file_record(archive)]
+        manifest.write_bytes(pkg.json_bytes(data))
+        with self.assertRaisesRegex(ValueError, 'Encrypted or special ZIP entry'):
+            pkg.verify_bundle(manifest)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX symlink creation; manifest rejection is tested on both')
     def test_symlinks_are_not_followed(self):
