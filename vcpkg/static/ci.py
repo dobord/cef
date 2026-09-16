@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
+import sdk_package
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = ROOT/'vcpkg/ports/cef-static'
@@ -100,15 +100,26 @@ def main() -> None:
                    'application_relocation_verified':True,'sandbox_verified':False,
                    'system_libraries_static':False,'smoke':proof,
                    'executable_sha256':build.digest(executable)}
-        (sdk/'static-sdk-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
-        (artifacts/f'{name}.json').write_text(json.dumps(receipt,indent=2)+'\n')
-        archive = artifacts/f'{name}.zip'
-        with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as bundle:
-            for path in sorted(sdk.rglob('*')):
-                if path.is_file(): bundle.write(path,Path(name)/path.relative_to(sdk))
-        if archive.stat().st_size >= 2*1024**3:
-            raise RuntimeError('SDK ZIP exceeds the per-asset release size limit; do not publish it unsplit')
-        (artifacts/f'{archive.name}.sha256').write_text(build.digest(archive)+'  '+archive.name+'\n')
+        receipt['smoke_runs'] = json.loads((diagnostics/'smoke-runs.json').read_text())
+        sdk_package.verify_receipt(receipt, os.environ['GITHUB_SHA'], args.triplet)
+        (sdk/'static-sdk-receipt.json').write_bytes(sdk_package.json_bytes(receipt))
+        # Preserve successful runtime evidence even when transport packaging fails.
+        (diagnostics/'static-sdk-receipt.json').write_bytes(sdk_package.json_bytes(receipt))
+        package_status = diagnostics/'sdk-packaging-status.json'
+        package_status.write_bytes(sdk_package.json_bytes({'status': 'packing'}))
+        try:
+            manifest = sdk_package.package_sdk(sdk, artifacts, name)
+            transport = sdk_package.read_json(manifest)
+            (diagnostics/'sdk-package-manifest.json').write_bytes(manifest.read_bytes())
+            package_status.write_bytes(sdk_package.json_bytes({
+                'status': 'verified', 'archive': transport['archive'],
+                'part_count': len(transport['parts']), 'file_count': len(transport['entries']),
+                'transport_verified': True}))
+        except Exception as error:
+            package_status.write_bytes(sdk_package.json_bytes({
+                'status': 'failed', 'transport_verified': False,
+                'error': type(error).__name__+': '+str(error)}))
+            raise
         print('STATIC_ENGINE_VCPKG_EXTERNAL_CAPI_CONSUMER_VERIFIED',flush=True)
     finally:
         port_logs = manager/'buildtrees/cef-static'

@@ -9,6 +9,7 @@ on:
       - '.github/workflows/linux-checkpoint-regression.yml'
       - '.github/workflows/windows-audit-regression.yml'
       - '.github/workflows/windows-delayload-regression.yml'
+      - '.github/workflows/sdk-package-regression.yml'
   pull_request:
     branches: [static-engine, vcpkg]
     paths:
@@ -18,6 +19,7 @@ on:
       - '.github/workflows/linux-checkpoint-regression.yml'
       - '.github/workflows/windows-audit-regression.yml'
       - '.github/workflows/windows-delayload-regression.yml'
+      - '.github/workflows/sdk-package-regression.yml'
   workflow_dispatch:
     inputs:
       checkpoint_run:
@@ -163,10 +165,13 @@ jobs:
   windows-delayload-preflight:
     needs: contract
     uses: ./.github/workflows/windows-delayload-regression.yml
+  sdk-package-preflight:
+    needs: contract
+    uses: ./.github/workflows/sdk-package-regression.yml
   source-build:
     # Do not execute pull-request code on persistent/self-hosted machines.
     if: github.event_name != 'pull_request'
-    needs: [contract, checkpoint-preflight, linux-checkpoint-preflight, windows-audit-preflight, windows-delayload-preflight]
+    needs: [contract, checkpoint-preflight, linux-checkpoint-preflight, windows-audit-preflight, windows-delayload-preflight, sdk-package-preflight]
     concurrency:
       group: cef-static-workspace-${{ matrix.triplet }}
       cancel-in-progress: false
@@ -314,6 +319,7 @@ jobs:
         with:
           name: cef-static-${{ matrix.triplet }}-sdk-${{ github.run_attempt }}
           path: static-artifacts/
+          compression-level: 0
           if-no-files-found: error
           retention-days: 7
   sdk-readiness:
@@ -338,9 +344,8 @@ jobs:
           names = {a['name'] for a in json.loads(result)['artifacts'] if not a['expired']}
           selected = {}
           for platform, triplet in [('linux', 'x64-linux'), ('windows', 'x64-windows-static')]:
-              prefix = 'cef-static-'+triplet+'-sdk-'
-              candidates = [n for n in names if n.startswith(prefix) and n[len(prefix):].isdigit()]
-              if candidates: selected[platform] = max(candidates, key=lambda n: int(n[len(prefix):]))
+              name = 'cef-static-'+triplet+'-sdk-'+os.environ['GITHUB_RUN_ATTEMPT']
+              if name in names: selected[platform] = name
           ready = len(selected) == 2
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('ready='+str(ready).lower()+'\n')
@@ -364,34 +369,31 @@ jobs:
       LINUX_SDK: ${{ needs.sdk-readiness.outputs.linux }}
       WINDOWS_SDK: ${{ needs.sdk-readiness.outputs.windows }}
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - name: Retrieve only SDKs from this successful run
         run: |
           gh run download "$RUN_ID" --repo "$GH_REPO" --name "$LINUX_SDK" --dir artifacts/linux
           gh run download "$RUN_ID" --repo "$GH_REPO" --name "$WINDOWS_SDK" --dir artifacts/windows
-      - name: Verify static runtime proofs, source commit and archive hashes
+      - name: Verify both complete bundles, current-commit runtime proofs and every ZIP member
         shell: python
         run: |
-          import hashlib, json, os, pathlib
-          root = pathlib.Path('artifacts')
-          archives = list(root.rglob('*-static-engine-capi.zip'))
-          if len(archives) != 2: raise RuntimeError('Expected exactly two native SDKs')
-          for archive in archives:
-              receipt = json.loads(archive.with_suffix('.json').read_text())
-              if receipt['integration_commit'] != os.environ['EXPECTED_COMMIT']:
-                  raise RuntimeError('SDK provenance mismatch')
-              if receipt['engine_linkage'] != 'static' or not receipt['sdk_relocation_verified'] or not receipt['application_relocation_verified']:
-                  raise RuntimeError('SDK is not a verified static engine')
-              proof = receipt['smoke']
-              if not all(proof[k] is True for k in ('javascript','paint','browser_modules_clean','renderer_modules_clean')) or proof['browser_pid'] == proof['renderer_pid']:
-                  raise RuntimeError('Missing separate-renderer runtime proof')
-              with archive.open('rb') as stream:
-                  actual = hashlib.file_digest(stream,'sha256').hexdigest()
-              if actual != pathlib.Path(str(archive)+'.sha256').read_text().split()[0]:
-                  raise RuntimeError('SDK archive digest mismatch')
-      - name: Attach tested static SDKs without overwriting existing release assets
-        shell: bash
+          import json, os, pathlib, sys
+          sys.path.insert(0, str(pathlib.Path('vcpkg/static').resolve()))
+          import sdk_package
+          files = sdk_package.release_files(pathlib.Path('artifacts'), os.environ['EXPECTED_COMMIT'])
+          manifest = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-release-assets.json'
+          with manifest.open('xb') as stream:
+              stream.write(sdk_package.json_bytes({'commit': os.environ['EXPECTED_COMMIT'],
+                  'files': [str(p.resolve()) for p in files]}))
+      - name: Attach exactly the verified assets without overwriting an existing release
+        shell: python
         run: |
-          set -euo pipefail
-          mapfile -d '' files < <(find artifacts -type f \( -name '*.zip' -o -name '*.sha256' -o -name '*.json' \) -print0)
-          test "${#files[@]}" -eq 6
-          gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GH_REPO"
+          import json, os, pathlib, subprocess
+          manifest = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-release-assets.json'
+          verified = json.loads(manifest.read_text())
+          if verified['commit'] != os.environ['EXPECTED_COMMIT']:
+              raise RuntimeError('Verified release file list belongs to another commit')
+          subprocess.run(['gh', 'release', 'upload', os.environ['RELEASE_TAG'],
+                          *verified['files'], '--repo', os.environ['GH_REPO']], check=True)
