@@ -383,6 +383,18 @@ jobs:
           sys.path.insert(0, str(pathlib.Path('vcpkg/static').resolve()))
           import sdk_package
           files = sdk_package.release_files(pathlib.Path('artifacts'), os.environ['EXPECTED_COMMIT'])
+          # Keep explicit provenance/module gates at the upload boundary too.
+          receipts = [p for p in files if p.name.endswith('.json')
+                      and not p.name.endswith('.manifest.json')]
+          if len(receipts) != 2:
+              raise RuntimeError('Exactly two native SDK receipts are required')
+          for path in receipts:
+              receipt = sdk_package.read_json(path)
+              if receipt['integration_commit'] != os.environ['EXPECTED_COMMIT']:
+                  raise RuntimeError('SDK receipt belongs to another commit')
+              if any(receipt['smoke'].get(field) is not True for field in
+                     ('browser_modules_clean', 'renderer_modules_clean', 'javascript', 'paint')):
+                  raise RuntimeError('SDK receipt has incomplete runtime checks')
           manifest = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-release-assets.json'
           with manifest.open('xb') as stream:
               stream.write(sdk_package.json_bytes({'commit': os.environ['EXPECTED_COMMIT'],
