@@ -1,0 +1,74 @@
+name: Native SDK multipart transport (fixture only)
+on:
+  workflow_call:
+  push:
+    branches: [fix/sdk-multipart-release]
+permissions:
+  contents: read
+jobs:
+  package-transport:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CEF_PACKAGE_LARGE: '1'
+      CEF_PACKAGE_REQUIRE_NATIVE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Activate native Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "MSVC is required" }
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "MSVC activation failed" }
+      - name: Measure exact native checkpoint recipes
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, sys
+          sys.path.insert(0, str(pathlib.Path('vcpkg/static').resolve()))
+          import checkpoint
+          if os.name == 'nt':
+              adapter = checkpoint
+          else:
+              import linux_checkpoint as adapter
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-static'
+          folder = pathlib.Path('static-diagnostics/sdk-package-regression')
+          folder.mkdir(parents=True, exist_ok=True)
+          result = {'fixture_only': True, 'engine_runtime_verified': False,
+                    'candidate': adapter.ci_identity(work)}
+          if os.environ['GITHUB_REF'] == 'refs/heads/fix/sdk-multipart-release':
+              path = pathlib.Path('vcpkg/static/ci.py')
+              candidate = path.read_bytes()
+              baseline = subprocess.check_output(['git', 'show', 'f0dfe4034a7d2240d6f5966597da69b1b7ae8424:'+path.as_posix()])
+              if b'\r\n' in candidate:
+                  baseline = baseline.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+              try:
+                  path.write_bytes(baseline)
+                  previous = adapter.ci_identity(work)
+              finally:
+                  path.write_bytes(candidate)
+              expected = '7859950fea9939d19ca6bfbe055c613a5702630d2881e40573df2f74327ce711' if os.name == 'nt' else 'aa3a3c8464ec76510db8594d15c4369a933a929ef2b016731c4cf1e092a34c8b'
+              if previous['recipe'] != expected:
+                  raise RuntimeError('Native baseline recipe does not match checkpoint producer')
+              result['baseline'] = previous
+          (folder/'identity.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
+      - name: Verify real 2-GiB boundary, ZIP64 integrity and native SDK relocation
+        run: python -m unittest discover -s vcpkg/static/tests -p test_sdk_package.py -v
+      - name: Preserve only small fixture evidence, never synthetic SDK packages
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sdk-package-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: static-diagnostics/sdk-package-regression/
+          if-no-files-found: error
+          retention-days: 7
