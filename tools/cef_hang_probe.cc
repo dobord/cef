@@ -25,7 +25,8 @@ static void Trace(HANDLE process, HANDLE thread, DWORD id) {
   frame.AddrPC.Mode = frame.AddrStack.Mode = frame.AddrFrame.Mode = AddrModeFlat;
   DWORD64 previous_pc = 0, previous_sp = 0;
   for (unsigned i = 0; i < 64 && frame.AddrPC.Offset; ++i) {
-    if (frame.AddrPC.Offset == previous_pc && frame.AddrStack.Offset == previous_sp) break;
+    // StackWalk64 may return the initial frame on its first call.
+    if (i > 1 && frame.AddrPC.Offset == previous_pc && frame.AddrStack.Offset == previous_sp) break;
     previous_pc = frame.AddrPC.Offset; previous_sp = frame.AddrStack.Offset;
     const DWORD64 base = SymGetModuleBase64(process, frame.AddrPC.Offset);
     alignas(SYMBOL_INFO) char storage[sizeof(SYMBOL_INFO) + 1024] = {};
