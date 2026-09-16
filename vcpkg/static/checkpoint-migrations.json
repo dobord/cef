@@ -2,23 +2,23 @@
   "schema": 1,
   "migrations": [
     {
-      "id": "thin-archive-export-v1",
+      "id": "smoke-supervision-v1",
       "platform": "windows-x64",
-      "from_recipe": "e97d153b74ce4cbb07f0fea2c278f2a9ef96e6c9ea91a8e4bcb8bfe7ceee7c6d",
-      "to_recipe": "dd3f8ecdc7b5478ccd0fbd3fc0f27b8220b8fa6f3a8a06936948164376214dfb",
-      "producer_run": 34989329826,
+      "from_recipe": "dd3f8ecdc7b5478ccd0fbd3fc0f27b8220b8fa6f3a8a06936948164376214dfb",
+      "to_recipe": "f9c0f52786358ef978ff732094fa6341dc2724528a4d095054f893d98743a9c3",
+      "producer_run": 35040251096,
       "producer_attempt": 1,
-      "producer_sha": "3709713759a51351dd0ea13a2d4ccf08dfeea28e",
+      "producer_sha": "23179b7a25e9b85f5bc63f532d154ce5b5acdbc2",
       "source_upgrade_required": false
     },
     {
-      "id": "thin-archive-export-v1",
+      "id": "smoke-supervision-v1",
       "platform": "linux-x64",
-      "from_recipe": "3d2c1c6f67ff8ea4ec56415e3c4f98d8c9c9e660211d1a51817cdf6f4bd3fa82",
-      "to_recipe": "34d35afe2cb61f80e5f0f075567dc614cf8bc8bac8d6c52ba48b4196634fa5ab",
-      "producer_run": 34989329826,
+      "from_recipe": "34d35afe2cb61f80e5f0f075567dc614cf8bc8bac8d6c52ba48b4196634fa5ab",
+      "to_recipe": "68e0a08d3d8b1ee0a7a4f7d74a83170212ef14f23053682e9c2e240c48b07ab2",
+      "producer_run": 35040251096,
       "producer_attempt": 1,
-      "producer_sha": "3709713759a51351dd0ea13a2d4ccf08dfeea28e",
+      "producer_sha": "23179b7a25e9b85f5bc63f532d154ce5b5acdbc2",
       "source_upgrade_required": false
     }
   ]

@@ -555,30 +555,13 @@ def verify_binary_imports(imports: str, windows: bool) -> None:
 
 
 def execute_smoke(exe: Path, logs: Path) -> dict:
-    # Never accept a proof left by an earlier executable/run.
-    (exe.parent/'smoke-result.json').unlink(missing_ok=True)
-    command = [exe]
-    if not WINDOWS:
-        command = ['xvfb-run', '-a', '-s', '-screen 0 1280x1024x24', exe]
-    try:
-        run(command, exe.parent, logs, 'static-smoke', timeout=120)
-    finally:
-        if (exe.parent/'cef-static.log').exists():
-            shutil.copy2(exe.parent/'cef-static.log', logs/'cef-static.log')
-        if (exe.parent/'debug.log').exists():
-            shutil.copy2(exe.parent/'debug.log', logs/'debug.log')
-    proof = json.loads((exe.parent/'smoke-result.json').read_text())
-    required = ['javascript', 'paint', 'browser_modules_clean', 'renderer_modules_clean']
-    if proof.get('cef') != '152.0.6+g708dc14+chromium-152.0.7977.83':
-        raise RuntimeError('Static engine version does not match the source pin')
-    if proof.get('engine') != 'static' or not all(proof.get(k) is True for k in required):
-        raise RuntimeError('Incomplete static engine runtime proof')
-    if (type(proof.get('browser_pid')) is not int or type(proof.get('renderer_pid')) is not int or
-            proof['browser_pid'] <= 0 or proof['renderer_pid'] <= 0 or
-            proof['browser_pid'] == proof['renderer_pid']):
-        raise RuntimeError('A real separate renderer was not observed')
-    shutil.copy2(exe.parent/'smoke-result.json', logs/'smoke-result.json')
-    return proof
+    # Import by exact sibling path: vcpkg's embeddable Python excludes it from
+    # sys.path. Runtime evidence is never reused after a timeout or failed run.
+    spec = importlib.util.spec_from_file_location('cef_smoke_runtime', HERE/'smoke_runtime.py')
+    assert spec and spec.loader
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    return runtime.execute(exe, logs, windows=WINDOWS, terminate=kill_tree)
 
 
 
