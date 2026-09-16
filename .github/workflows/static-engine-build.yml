@@ -81,6 +81,16 @@ jobs:
           cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
             if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH|VSINSTALLDIR|VCINSTALLDIR|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UniversalCRTSdkDir|UCRTVersion|VSCMD_[^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
           }
+      - name: Test external consumer CMake paths with native link and run
+        run: python -m unittest discover -s vcpkg/static/tests -p test_consumer_paths.py -v
+      - name: Preserve native consumer path regression evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: consumer-path-regression-${{ matrix.os }}-${{ github.run_attempt }}
+          path: static-diagnostics/consumer-path-regression/
+          if-no-files-found: error
+          retention-days: 7
       - name: Fetch exact pinned Skia source for Dawn X11 regression
         shell: python
         run: |
