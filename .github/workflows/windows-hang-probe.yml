@@ -1,0 +1,56 @@
+name: Native Windows hang stacks (diagnostic only)
+on:
+  push:
+    branches: [static-engine]
+    paths: ['tools/cef_hang_probe.cc', 'tools/cef_hang_probe.py', '.github/workflows/windows-hang-probe.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Activate installed MSVC
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "Missing MSVC" }
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "MSVC activation failed" }
+      - name: Verify timeout stacks on a real sleeping process
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force hang-diagnostics | Out-Null
+          cl /nologo /std:c++17 /EHsc /MT /W4 /WX tools/cef_hang_probe.cc /Fe:hang-diagnostics/probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Probe compilation failed" }
+          '#include <windows.h>' + "`n" + '__declspec(noinline) void hang_marker(void){Sleep(INFINITE);} int main(void){hang_marker();return 0;}' | Set-Content hang-diagnostics/fixture.c
+          cl /nologo /MT /Zi /Od hang-diagnostics/fixture.c /Fe:hang-diagnostics/fixture.exe /link /DEBUG:FULL /INCREMENTAL:NO /PDB:hang-diagnostics/fixture.pdb
+          if ($LASTEXITCODE -ne 0) { throw "Fixture compilation failed" }
+          & hang-diagnostics/probe.exe "$pwd\hang-diagnostics\fixture.exe" 2 > hang-diagnostics/fixture.log 2>&1
+          if ($LASTEXITCODE -ne 124) { throw "Timeout incorrectly accepted" }
+          $text = Get-Content -Raw hang-diagnostics/fixture.log
+          if ($text -notmatch 'hang_marker' -or $text -notmatch 'FRAME' -or $text -notmatch 'main=1') { throw "No usable fixture stacks" }
+          exit 0
+      - name: Restore latest completed-link state without changing recipe
+        run: python vcpkg/static/resume_checkpoint.py restore --checkpoint-run 35054794110
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Capture the exact diagnostic executable thread stacks
+        run: python tools/cef_hang_probe.py
+      - name: Preserve diagnostics, not an SDK
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-hang-stacks-${{ github.run_id }}
+          path: |
+            hang-diagnostics/**/*.log
+            hang-diagnostics/**/*.json
+            static-diagnostics/resume/*.json
+          retention-days: 7
+          if-no-files-found: warn
