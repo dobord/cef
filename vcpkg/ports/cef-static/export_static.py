@@ -208,12 +208,23 @@ def link_options(flags: list[str], windows: bool,
     sysroot selection belong to the consumer, not to a source workspace path.
     """
     kept, omitted = [], []
+    has_delay_load = windows and any(f.lower().startswith('/delayload:') for f in flags)
     for flag in flags:
         if FORBIDDEN.search(flag):
             raise RuntimeError(f'Shared engine flag cannot be exported: {flag}')
         lower = flag.lower()
         reason = None
         if windows:
+            # Chromium common_linker_setup intentionally couples this exact
+            # exception with a superset of optional /DELAYLOAD declarations.
+            # Lazy archive selection differs per consumer. Pruning declarations
+            # using one reference EXE would turn another consumer's used imports
+            # into eager loads. Preserve the upstream policy, not arbitrary
+            # /IGNORE values: /WX and all non-4199 diagnostics stay in force.
+            # Never inject the exception when it is absent from the input graph.
+            if lower == '/ignore:4199' and has_delay_load:
+                kept.append(flag)
+                continue
             if lower in WINDOWS_FLAG_LIBRARIES:
                 kept.append(flag)
                 continue

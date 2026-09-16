@@ -8,6 +8,7 @@ on:
       - '.github/workflows/static-engine-build.yml'
       - '.github/workflows/linux-checkpoint-regression.yml'
       - '.github/workflows/windows-audit-regression.yml'
+      - '.github/workflows/windows-delayload-regression.yml'
   pull_request:
     branches: [static-engine, vcpkg]
     paths:
@@ -16,6 +17,7 @@ on:
       - '.github/workflows/static-engine-build.yml'
       - '.github/workflows/linux-checkpoint-regression.yml'
       - '.github/workflows/windows-audit-regression.yml'
+      - '.github/workflows/windows-delayload-regression.yml'
   workflow_dispatch:
     inputs:
       checkpoint_run:
@@ -158,10 +160,13 @@ jobs:
   windows-audit-preflight:
     needs: contract
     uses: ./.github/workflows/windows-audit-regression.yml
+  windows-delayload-preflight:
+    needs: contract
+    uses: ./.github/workflows/windows-delayload-regression.yml
   source-build:
     # Do not execute pull-request code on persistent/self-hosted machines.
     if: github.event_name != 'pull_request'
-    needs: [contract, checkpoint-preflight, linux-checkpoint-preflight, windows-audit-preflight]
+    needs: [contract, checkpoint-preflight, linux-checkpoint-preflight, windows-audit-preflight, windows-delayload-preflight]
     concurrency:
       group: cef-static-workspace-${{ matrix.triplet }}
       cancel-in-progress: false

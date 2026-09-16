@@ -1,0 +1,74 @@
+name: Native Windows delay-load policy (fixture only)
+on:
+  workflow_call:
+  push:
+    branches: [fix/windows-delayload-policy]
+permissions:
+  contents: read
+jobs:
+  delay-policy:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Activate native Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "MSVC is required" }
+          cmd /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 >nul && set" | ForEach-Object {
+            if ($_ -match '^(Path|INCLUDE|LIB|LIBPATH)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "MSVC activation failed" }
+      - name: Record candidate recipe without claiming an SDK
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, subprocess, sys
+          sys.path.insert(0, str(pathlib.Path('vcpkg/static').resolve()))
+          import checkpoint
+          if os.name == 'nt':
+              adapter = checkpoint
+          else:
+              import linux_checkpoint as adapter
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-static'
+          current = adapter.ci_identity(work)
+          folder = pathlib.Path('static-diagnostics/windows-delayload-regression')
+          folder.mkdir(parents=True, exist_ok=True)
+          result = {'fixture_only': True, 'engine_runtime_verified': False, 'candidate': current}
+          if os.environ['GITHUB_REF'] == 'refs/heads/fix/windows-delayload-policy':
+              path = pathlib.Path('vcpkg/ports/cef-static/export_static.py')
+              candidate = path.read_bytes()
+              original = subprocess.check_output(['git', 'show', 'fdf134fbfb7416643f662008391d3e1bbc9b3755:'+path.as_posix()])
+              if b'\r\n' in candidate:
+                  original = original.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+              try:
+                  path.write_bytes(original)
+                  previous = adapter.ci_identity(work)
+              finally:
+                  path.write_bytes(candidate)
+              expected = '108b2abe572372208cb17c8f253227f38258e6e99b05c10936d17b5132cddf44' if os.name == 'nt' else 'f92593b025ef027a687582744c113c10a4efe21715f3c20052e1f008adb2b53f'
+              if previous['recipe'] != expected:
+                  raise RuntimeError('Baseline recipe differs from reviewed producer')
+              result['baseline'] = previous
+              result['candidate_export_sha256'] = hashlib.sha256(candidate).hexdigest()
+          (folder/'identity.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
+      - name: Test exact delay policy and native import/load behavior
+        run: python -m unittest discover -s vcpkg/static/tests -p test_windows_delayload.py -v
+      - name: Test existing port contracts
+        run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
+      - name: Preserve native delay-policy evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: delay-policy-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: static-diagnostics/windows-delayload-regression/
+          retention-days: 7
+          if-no-files-found: error
