@@ -2,23 +2,23 @@
   "schema": 1,
   "migrations": [
     {
-      "id": "smoke-supervision-v1",
+      "id": "instance-tracer-no-hooks-v1",
       "platform": "windows-x64",
-      "from_recipe": "dd3f8ecdc7b5478ccd0fbd3fc0f27b8220b8fa6f3a8a06936948164376214dfb",
-      "to_recipe": "f9c0f52786358ef978ff732094fa6341dc2724528a4d095054f893d98743a9c3",
-      "producer_run": 35040251096,
+      "from_recipe": "f9c0f52786358ef978ff732094fa6341dc2724528a4d095054f893d98743a9c3",
+      "to_recipe": "523d8196bc4448be2bbfdb21edb71d8b55af940e2cf1eb2b80e89693ec38a9e6",
+      "producer_run": 35054794110,
       "producer_attempt": 1,
-      "producer_sha": "23179b7a25e9b85f5bc63f532d154ce5b5acdbc2",
+      "producer_sha": "1b31d3aa16d3953c2f12bf4e96667c88cc983143",
       "source_upgrade_required": false
     },
     {
-      "id": "smoke-supervision-v1",
+      "id": "instance-tracer-no-hooks-v1",
       "platform": "linux-x64",
-      "from_recipe": "34d35afe2cb61f80e5f0f075567dc614cf8bc8bac8d6c52ba48b4196634fa5ab",
-      "to_recipe": "68e0a08d3d8b1ee0a7a4f7d74a83170212ef14f23053682e9c2e240c48b07ab2",
-      "producer_run": 35040251096,
+      "from_recipe": "68e0a08d3d8b1ee0a7a4f7d74a83170212ef14f23053682e9c2e240c48b07ab2",
+      "to_recipe": "c707853f3527f612eb2905ba190a4fdd729ba99af45a02601f19d0a46a6fcb45",
+      "producer_run": 35054794110,
       "producer_attempt": 1,
-      "producer_sha": "23179b7a25e9b85f5bc63f532d154ce5b5acdbc2",
+      "producer_sha": "1b31d3aa16d3953c2f12bf4e96667c88cc983143",
       "source_upgrade_required": false
     }
   ]

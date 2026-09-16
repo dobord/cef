@@ -132,6 +132,10 @@ def main() -> None:
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--receipt', type=Path, required=True)
     args = parser.parse_args()
+    # The launcher inserts only this script's directory for sibling imports.
+    import instance_tracer_patch
+    instance_tracer_patch.apply(args.source,
+                               args.receipt.with_name('instance-tracer-patch.json'))
     apply(args.source, args.receipt)
 
 

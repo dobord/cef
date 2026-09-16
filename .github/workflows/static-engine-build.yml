@@ -107,6 +107,19 @@ jobs:
         run: python -m unittest discover -s vcpkg/static/tests -p test_runtime_startup.py -v
         env:
           CEF_PINNED_RUNTIME: ${{ runner.temp }}/cef-runtime-pinned
+      - name: Reproduce and reject BRP tracer allocator deadlocks
+        run: python -m unittest discover -s vcpkg/static/tests -p test_instance_tracer.py -v
+        env:
+          CEF_PINNED_RUNTIME: ${{ runner.temp }}/cef-runtime-pinned
+          CEF_REQUIRE_TRACER_NATIVE: '1'
+      - name: Preserve exact-source tracer regression evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: instance-tracer-regression-${{ matrix.os }}-${{ github.run_attempt }}
+          path: static-diagnostics/instance-tracer-regression/
+          if-no-files-found: error
+          retention-days: 7
       - name: Preserve Skia regression proof
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

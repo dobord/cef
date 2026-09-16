@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download exact pinned RNG files and apply the pinned upstream CEF patch.
+"""Prepare exact pinned RNG, BRP tracer and internal-allocator regression files.
 
 This prepares full-source unit fixtures, not a Chromium build or runtime proof.
 """
@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parents[2]
 CHROMIUM = '79460ebecaa5625e57a5fb679a735659e73dc687'
 BEFORE = {'base/rand_util.cc': 'ee86984a222c44d29c83da0134a93b0e7ddaa1e4',
           'base/rand_util.h': 'a9ca1f92958e792db46c3e11182b6313a63ae1bc'}
+PA = 'base/allocator/partition_allocator/src/partition_alloc/'
+TRACER_INPUTS = {
+    PA+'pointers/instance_tracer.cc': '46bad4bd7d3438981ae04ccaaf1760d4c0b02aca',
+    PA+'internal_allocator.h': '4e6ed300242114a8c18c072a13d1e7f3c162d66a',
+    PA+'internal_allocator_forward.h': '0956089445befdaaf2234b7f6a7d21428d797ce7',
+}
 AFTER = {'base/rand_util.cc': '5580637cc84be708c8fe65b535fae219555515c3',
          'base/rand_util.h': 'd14daa58e41ccbfc6638a43b10d0c9858ef8f0cf'}
 PATCH = 'f9174db23a6a1a0ba231d0f3009dac2cd8e7a32f'
@@ -36,7 +42,7 @@ def prepare(destination: Path) -> None:
         raise RuntimeError('Not the pinned upstream CEF random patch')
     destination.mkdir(parents=True)
     local_patch = destination/'cef-rand.patch';local_patch.write_bytes(data)
-    for name, expected in BEFORE.items():
+    for name, expected in (BEFORE | TRACER_INPUTS).items():
         url=f'https://raw.githubusercontent.com/chromium/chromium/{CHROMIUM}/{name}'
         for attempt in range(3):
             try:
@@ -58,7 +64,7 @@ def prepare(destination: Path) -> None:
         if blob((destination/name).read_bytes())!=expected:
             raise RuntimeError('CEF runtime patch output mismatch: '+name)
     (destination/'provenance.json').write_text(json.dumps({'chromium_commit':CHROMIUM,
-        'upstream_cef_patch_blob':PATCH,'before_blobs':BEFORE,'after_blobs':AFTER,
+        'upstream_cef_patch_blob':PATCH,'before_blobs':BEFORE,'after_blobs':AFTER,'tracer_inputs':TRACER_INPUTS,
         'fixture_only':True,'engine_runtime_verified':False},indent=2)+'\n')
 
 
