@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
+import sdk_package
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = ROOT/'vcpkg/ports/cef-static'
@@ -100,15 +100,9 @@ def main() -> None:
                    'application_relocation_verified':True,'sandbox_verified':False,
                    'system_libraries_static':False,'smoke':proof,
                    'executable_sha256':build.digest(executable)}
-        (sdk/'static-sdk-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
-        (artifacts/f'{name}.json').write_text(json.dumps(receipt,indent=2)+'\n')
-        archive = artifacts/f'{name}.zip'
-        with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as bundle:
-            for path in sorted(sdk.rglob('*')):
-                if path.is_file(): bundle.write(path,Path(name)/path.relative_to(sdk))
-        if archive.stat().st_size >= 2*1024**3:
-            raise RuntimeError('SDK ZIP exceeds the per-asset release size limit; do not publish it unsplit')
-        (artifacts/f'{archive.name}.sha256').write_text(build.digest(archive)+'  '+archive.name+'\n')
+        receipt['runtime_runs'] = json.loads((diagnostics/'smoke-runs.json').read_text())
+        sdk_package.package_sdk(sdk, artifacts, name, receipt,
+                                diagnostics/'sdk-packaging.json')
         print('STATIC_ENGINE_VCPKG_EXTERNAL_CAPI_CONSUMER_VERIFIED',flush=True)
     finally:
         port_logs = manager/'buildtrees/cef-static'

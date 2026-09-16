@@ -1,0 +1,63 @@
+name: SDK package integrity and native ZIP64 regression
+on:
+  workflow_call:
+  push:
+    branches: [fix/sdk-multipart-package]
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Measure recipe compatibility on the native host
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, sys
+          sys.path.insert(0, str(pathlib.Path('vcpkg/static').resolve()))
+          import checkpoint
+          if os.name == 'nt':
+              adapter = checkpoint
+          else:
+              import linux_checkpoint as adapter
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-static'
+          candidate = adapter.ci_identity(work)
+          result = {'fixture_only': True, 'candidate': candidate}
+          if os.environ['GITHUB_REF'] == 'refs/heads/fix/sdk-multipart-package':
+              path = pathlib.Path('vcpkg/static/ci.py')
+              current = path.read_bytes()
+              previous = subprocess.check_output(['git', 'show', 'f0dfe4034a7d2240d6f5966597da69b1b7ae8424:'+path.as_posix()])
+              if b'\r\n' in current:
+                  previous = previous.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+              try:
+                  path.write_bytes(previous)
+                  baseline = adapter.ci_identity(work)
+              finally:
+                  path.write_bytes(current)
+              expected = '7859950fea9939d19ca6bfbe055c613a5702630d2881e40573df2f74327ce711' if os.name == 'nt' else 'aa3a3c8464ec76510db8594d15c4369a933a929ef2b016731c4cf1e092a34c8b'
+              if baseline['recipe'] != expected:
+                  raise RuntimeError('Unexpected producer recipe')
+              result['baseline'] = baseline
+          folder = pathlib.Path('static-diagnostics/sdk-packaging-regression')
+          folder.mkdir(parents=True, exist_ok=True)
+          (folder/'identity.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
+      - name: Verify splits, reassembly, negative controls and real ZIP beyond 2 GiB
+        run: python -m unittest discover -s vcpkg/static/tests -p test_sdk_package.py -v
+        env:
+          CEF_SDK_LARGE_PACKAGE_TEST: '1'
+      - name: Preserve packaging evidence without uploading the synthetic SDK
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sdk-package-regression-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: static-diagnostics/sdk-packaging-regression/
+          if-no-files-found: error
+          retention-days: 7
