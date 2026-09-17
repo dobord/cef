@@ -1,0 +1,30 @@
+name: Windows runner content inventory (not engine proof)
+on:
+  push:
+    branches: [fix/checkpoint-image-rollout]
+    paths:
+      - 'vcpkg/static/runner_fingerprint.py'
+      - '.github/workflows/runner-image-compatibility.yml'
+permissions:
+  contents: read
+jobs:
+  inventory:
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: [1, 2, 3, 4]
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Hash installed host build inputs without changing any image or checkpoint
+        run: python vcpkg/static/runner_fingerprint.py --output runner-evidence/toolchain.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-toolchain-${{ matrix.sample }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: runner-evidence/
+          retention-days: 14
+          if-no-files-found: warn

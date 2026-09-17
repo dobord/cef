@@ -1,0 +1,133 @@
+{
+  "engine_verified": false,
+  "image": "20260907.297.1",
+  "image_os": "win22",
+  "run_id": "35177873930",
+  "sha": "dc1119a6a2c9ed43a70ae3b2b82017bea625669c",
+  "toolchain": {
+    "components": {
+      "cmake-bin": {
+        "bytes": 66315024,
+        "files": 5,
+        "path": "C:/Program Files/CMake/bin",
+        "sha256": "f3dae39fcd74e8cebab56405026c2d23fce044e26650f292c8ea71dd818dbac2"
+      },
+      "cmake-share": {
+        "bytes": 9104081,
+        "files": 3772,
+        "path": "C:/Program Files/CMake/share",
+        "sha256": "9d3ac508f2c9ce994f676ed660c8be1067228954a77feff8165e3bbf0b748555"
+      },
+      "git-bin": {
+        "bytes": 130088,
+        "files": 3,
+        "path": "C:/Program Files/Git/bin",
+        "sha256": "da2ba8c1855f77defa4088f4061fe083952e99db209768ab8e56cb48fe5fedf4"
+      },
+      "git-cmd": {
+        "bytes": 463454,
+        "files": 10,
+        "path": "C:/Program Files/Git/cmd",
+        "sha256": "2ea417bf8bcbccf2f74501056395c8caf89a01eeaf16159a1a3099a2049fd50e"
+      },
+      "git-core": {
+        "bytes": 85589651,
+        "files": 141,
+        "path": "C:/Program Files/Git/mingw64/libexec/git-core",
+        "sha256": "953ffe39c3b5a04d3d5818f05bd47ae2db0749eb999a60061d11cb4c6c588a9c"
+      },
+      "msbuild": {
+        "bytes": 85566324,
+        "files": 1034,
+        "path": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current",
+        "sha256": "d2377377cb1592de2e6eda2dec7d31b77fcb7d29384a5d644f071963af1c3e66"
+      },
+      "msvc": {
+        "bytes": 15494648296,
+        "files": 6846,
+        "path": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/MSVC",
+        "sha256": "4528cb98c9e2facd97be1483456a59b7a9f75e457336d4715932b0fefb75e834"
+      },
+      "netfx-sdk": {
+        "bytes": 4049131,
+        "files": 61,
+        "path": "C:/Program Files (x86)/Windows Kits/NETFXSDK/4.8",
+        "sha256": "e3d8a15c39f66cd2ccaff6f537f74f041ce4151f5f420be33cd06919267f9d41"
+      },
+      "ninja": {
+        "bytes": 3466696,
+        "files": 1,
+        "path": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "sha256": "5d06854c1b2acbcf4f607b8741658629f7d24d95153e9d1c5443d8615f31badc"
+      },
+      "python-dlls": {
+        "bytes": 15330590,
+        "files": 42,
+        "path": "C:/hostedtoolcache/windows/Python/3.12.10/x64/DLLs",
+        "sha256": "84f57caea35fe2075faead5bea2e826737e0e0956744fa32948c8e4a9d504a59"
+      },
+      "python-exe": {
+        "bytes": 104952,
+        "files": 1,
+        "path": "C:/hostedtoolcache/windows/Python/3.12.10/x64/python.exe",
+        "sha256": "0c84675d4b6ed0077f5e6accec7aaed4ecf4e24f65b096fd93db4525fad04c38"
+      },
+      "python-python3.dll": {
+        "bytes": 70376,
+        "files": 1,
+        "path": "C:/hostedtoolcache/windows/Python/3.12.10/x64/python3.dll",
+        "sha256": "0256d574fced235d2cb3f1aef2ecdf820e50e6cc770e19a0c15106aadae0d1cc"
+      },
+      "python-python312.dll": {
+        "bytes": 6945272,
+        "files": 1,
+        "path": "C:/hostedtoolcache/windows/Python/3.12.10/x64/python312.dll",
+        "sha256": "cb615c641f2e5f4bedb86957b7fe681d946b2b5f8d0e5c355226a1046383f9ae"
+      },
+      "python-stdlib": {
+        "bytes": 43971009,
+        "files": 2397,
+        "path": "C:/hostedtoolcache/windows/Python/3.12.10/x64/Lib",
+        "sha256": "3ae985fd1e301468dea2e964856cd33791577f9be476117fae6ebe827733c577"
+      },
+      "sdk-bin": {
+        "bytes": 993112807,
+        "files": 3195,
+        "path": "C:/Program Files (x86)/Windows Kits/10/bin",
+        "sha256": "fbd48a170e398e9be364e7471a302b42b3cd3351aafa92cc8c064475fa6e0226"
+      },
+      "sdk-include": {
+        "bytes": 1368812235,
+        "files": 20337,
+        "path": "C:/Program Files (x86)/Windows Kits/10/Include",
+        "sha256": "e5ca3222070bbd53abdd15ba26633062007fc29b409d543781788f3f5f99eb73"
+      },
+      "sdk-lib": {
+        "bytes": 4262328678,
+        "files": 7531,
+        "path": "C:/Program Files (x86)/Windows Kits/10/Lib",
+        "sha256": "a8b6e053a640140be5d8b65ac68992b17cb8858b4c8f9615b5c40e42c638ea3e"
+      },
+      "vc-build": {
+        "bytes": 14120,
+        "files": 21,
+        "path": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build",
+        "sha256": "9a574a4fc3e9d05c963b063f9d10e75148e537fe50e47bd515ee09d3145df656"
+      },
+      "vc-include": {
+        "bytes": 33601,
+        "files": 4,
+        "path": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/VS/include",
+        "sha256": "66345866efa5072fda8dedc251f5d8d2fe9e40631ef96d75b071e06f26a33da6"
+      },
+      "vswhere": {
+        "bytes": 469456,
+        "files": 1,
+        "path": "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe",
+        "sha256": "88fec96c733b9531d0bc727250bd79e8ce85812783065906804d289973e5ab4a"
+      }
+    },
+    "schema": 1,
+    "sha256": "e7b4113d5e19720b6a2adf0cf01850691d9e7403e1ffeea381d9ae69505f6dd7"
+  }
+}

@@ -9,7 +9,15 @@
       "producer_run": 35132153154,
       "producer_attempt": 1,
       "producer_sha": "c4e8c1e24f0483c42c5439bd95df293d05405a83",
-      "source_upgrade_required": false
+      "source_upgrade_required": false,
+      "image_transition": {
+        "from_image": "20260907.297.1",
+        "to_image": "20260913.307.1",
+        "toolchain_sha256": "e7b4113d5e19720b6a2adf0cf01850691d9e7403e1ffeea381d9ae69505f6dd7",
+        "collector_sha256": "02c27327b560e888140048c2a4775d8b019e7054f145f4c2bb47129bcd4c47ba",
+        "evidence_run": 35177873930,
+        "evidence_sha": "dc1119a6a2c9ed43a70ae3b2b82017bea625669c"
+      }
     },
     {
       "id": "readonly-sdk-session-cleanup-v1",
