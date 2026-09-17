@@ -1,0 +1,40 @@
+name: Pinned CEF release import native verification
+on:
+  push:
+    branches: [feature/vcpkg-static-integration]
+    paths: ['vcpkg/integration/**', '.github/workflows/import-native.yml']
+  pull_request:
+    branches: [static-engine]
+    paths: ['vcpkg/integration/**', '.github/workflows/import-native.yml']
+permissions:
+  contents: read
+jobs:
+  consumer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c
+        with:
+          python-version: '3.12'
+      - name: Install declared engine-static Linux platform prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build xvfb xauth libglib2.0-dev libnss3-dev libnspr4-dev libatk1.0-dev libatk-bridge2.0-dev libcups2-dev libx11-dev libxcomposite-dev libxdamage-dev libxext-dev libxfixes-dev libxrandr-dev libxrender-dev libxtst-dev libxi-dev libxkbcommon-dev libgbm-dev libdrm-dev libexpat1-dev uuid-dev libxcb1-dev libpci-dev libudev-dev libcairo2-dev libpango1.0-dev libasound2-dev zlib1g-dev libatspi2.0-dev
+      - name: Import locked release and run a newly linked relocated application
+        run: python vcpkg/integration/native_import_test.py --work "${{ runner.temp }}/cef-import-native" --evidence "${{ github.workspace }}/static-diagnostics/import-native"
+      - name: Preserve public runtime evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cef-import-native-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: static-diagnostics/import-native/
+          retention-days: 7
+          if-no-files-found: warn
