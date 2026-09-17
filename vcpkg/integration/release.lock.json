@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "tag": "cef-152.0.6-static-capi-r35179388662-a1",
+  "tested_commit": "bd0f30183448eca4c3be183af644baeb94116bce",
+  "platforms": {
+    "x64-linux-static-release": {
+      "source_triplet": "x64-linux",
+      "manifest": {
+        "name": "cef-152.0.6-x64-linux-static-engine-capi.manifest.json",
+        "size": 1926270,
+        "sha256": "ccfa540797a61dfabc7c26efc6faf2f6ac11f9de3c678dce13f7608d89e8f7d2"
+      }
+    },
+    "x64-windows-static-release": {
+      "source_triplet": "x64-windows-static",
+      "manifest": {
+        "name": "cef-152.0.6-x64-windows-static-static-engine-capi.manifest.json",
+        "size": 2046506,
+        "sha256": "a496a276822e7d492300feb29577b70a5873f54532cb95e76917553feb60d600"
+      }
+    }
+  }
+}
