@@ -29,6 +29,7 @@ patches = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(patches)
 build = linux_slice.build
 LEDGER = json.loads((ROOT/'vcpkg/static/checkpoint-migrations.json').read_text())
+LEGACY_MIGRATIONS = [m for m in LEDGER['migrations'] if m['id'] == 'readonly-sdk-session-cleanup-v1']
 PINNED = os.environ.get('CEF_PINNED_SKIA')
 CXX = shutil.which('clang++') or shutil.which('g++')
 FLAGS = ('ENABLE_VULKAN', 'SKIA_USE_DAWN', 'SUPPORTS_OZONE_X11', 'IS_OZONE')
@@ -144,9 +145,51 @@ int main() {
 
 
 class MigrationTests(unittest.TestCase):
-    def test_current_recipes_equal_ledger_destinations(self):
-        for m in LEDGER['migrations']:
-            self.assertEqual(recipe(m['platform']),m['to_recipe'])
+    def test_historical_ledger_destinations_are_not_retargeted(self):
+        # The reviewed cleanup migration predates the platform GN profile. Its
+        # destinations are historical input evidence, not a moving HEAD alias.
+        expected = {
+            'windows-x64': 'bdcac554852f05628e5288dcbe8fbd65fe23c6fdb827946db43f7d9a058d4600',
+            'linux-x64': '5ad5e3cc858f686f467be68591dbcff683b989b608a8812da25d763370d8ed20',
+        }
+        self.assertEqual(len(LEGACY_MIGRATIONS), len(expected))
+        self.assertEqual({m['platform']: m['to_recipe'] for m in LEGACY_MIGRATIONS}, expected)
+
+    def test_current_unreviewed_recipe_does_not_reuse_legacy_producer(self):
+        for m in LEGACY_MIGRATIONS:
+            current = recipe(m['platform'])
+            # This branch has changed source-build/export inputs. Do not make
+            # it green by silently authorizing an old checkpoint for those inputs.
+            self.assertNotEqual(current, m['to_recipe'])
+            identity = {'platform': m['platform'], 'recipe': current,
+                        'work': 'unchanged', 'image': 'unchanged', 'schema': 3}
+            run = {'id': m['producer_run'], 'head_sha': m['producer_sha'],
+                   'run_attempt': m['producer_attempt']}
+            with patch('runner_image_migration.input_identity') as image_check:
+                self.assertEqual(resume.checkpoint_input_identity(identity, run), (identity, None))
+                image_check.assert_not_called()
+
+    def test_legacy_archive_is_rejected_before_current_workspace_is_created(self):
+        import checkpoint
+        import linux_checkpoint
+        for m in LEGACY_MIGRATIONS:
+            codec = linux_checkpoint if m['platform'] == 'linux-x64' else checkpoint
+            with self.subTest(platform=m['platform']), tempfile.TemporaryDirectory() as td:
+                root = Path(td); source = root/'source'; source.mkdir()
+                (source/'object.o').write_bytes(b'synthetic-object-not-a-CEF-build')
+                target = root/'restored'
+                current = {'platform': m['platform'], 'recipe': recipe(m['platform']),
+                           'schema': codec.SCHEMA, 'work': str(target), 'image': 'unchanged'}
+                producer = dict(current, recipe=m['from_recipe'])
+                codec.save(source, root/'archive', producer, limit=64)
+                run = {'id': m['producer_run'], 'head_sha': m['producer_sha'],
+                       'run_attempt': m['producer_attempt']}
+                selected, migration = resume.checkpoint_input_identity(current, run)
+                self.assertIsNone(migration)
+                with self.assertRaisesRegex(ValueError, 'identity'):
+                    codec.restore(root/'archive', target, selected)
+                self.assertFalse(target.exists())
+                self.assertEqual((source/'object.o').read_bytes(), b'synthetic-object-not-a-CEF-build')
 
     def test_only_exact_producer_recipe_sha_attempt_migrates(self):
         # This unit test isolates producer/recipe selection from native host I/O.

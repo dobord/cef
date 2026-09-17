@@ -111,3 +111,17 @@ receipt explicitly confined to a test fixture, and a separately configured
 CMake consumer. It hides the producer source, package and dependency prefix,
 checks a cyclic engine/platform link, executes it, then verifies that missing
 and modified dependencies are refused. It is not a Chromium runtime test.
+
+## Historical checkpoints are not new-profile approvals
+
+The existing `checkpoint-migrations.json` entries retain their reviewed
+producer run/attempt and destination recipe hashes. They are historical rules,
+not aliases for the current HEAD. Changes to source build/export inputs can
+change the current checkpoint identity without making those older rules invalid.
+The new recipe must refuse those producers until a separate migration is
+reviewed; neither passing GN fixtures nor an unchanged CEF version grants reuse.
+
+The migration regression pins the old destinations and tests that this branch's
+new identities do not select them. It also saves real fixture archives with the
+old identity and requires rejection before any restore directory is created.
+No production migration or fingerprint policy is relaxed to make CI pass.
