@@ -8,6 +8,8 @@ import subprocess
 import shutil
 import sys
 import checkpoint as cp
+import runner_fingerprint
+import runner_image_migration
 
 
 def native_ninja():
@@ -30,12 +32,27 @@ def run(args, cwd=None):
     subprocess.run(list(map(str, args)), cwd=cwd, check=True)
 
 
+def fixture_identity(work, host=None):
+    identity = {'recipe': 'native-archive-fixture-v4-host-content',
+                'work': str(work.resolve()), 'os': os.name}
+    if os.name == 'nt':
+        identity['host_toolchain_sha256'] = runner_image_migration.checked_digest(
+            host if host is not None else runner_fingerprint.collect())
+    else:
+        # Linux retains its existing image-bound policy.
+        identity['image'] = os.environ.get('ImageVersion')
+    return identity
+
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('phase',choices=['produce','consume']);args=parser.parse_args()
     work=Path(os.environ['RUNNER_TEMP'])/'cef-checkpoint-probe'
     package=Path('checkpoint-probe-artifact').resolve()
-    identity={'recipe':'native-archive-fixture-v3-link-times','work':str(work.resolve()),
-              'image':os.environ.get('ImageVersion'), 'os':os.name}
+    host = runner_fingerprint.collect() if os.name == 'nt' else None
+    identity = fixture_identity(work, host)
+    Path('checkpoint-probe-host.json').write_text(json.dumps({
+        'image': os.environ.get('ImageVersion'), 'identity': identity,
+        'toolchain': host, 'engine_build_verified': False}, indent=2) + '\n')
     if args.phase=='produce':
         work.mkdir()
         (work/'value.h').write_text('#define RESULT 42\nint value(void);\n')
@@ -58,7 +75,8 @@ def main():
         run(['cmake','-S',work,'-B',work/'build','-G','Ninja','-DCMAKE_BUILD_TYPE=Release','-DCMAKE_MAKE_PROGRAM='+native_ninja()])
         run(['cmake','--build',work/'build','--target','first'])
         obj=next((work/'build/CMakeFiles/first.dir').glob('*.obj' if os.name=='nt' else '*.o'))
-        descriptor={'object':obj.relative_to(work).as_posix(),'mtime_ns':obj.stat().st_mtime_ns,'sha256':cp.digest(obj),
+        descriptor={'producer_image':os.environ.get('ImageVersion'),
+                    'object':obj.relative_to(work).as_posix(),'mtime_ns':obj.stat().st_mtime_ns,'sha256':cp.digest(obj),
                     'link_mtime_ns':(work/'value-link.h').lstat().st_mtime_ns,
                     'target_mtime_ns':(work/'alias-target.h').stat().st_mtime_ns}
         (work/'fixture.json').write_text(json.dumps(descriptor))
@@ -87,7 +105,10 @@ def main():
         run(['cmake','--build',work/'build','--target','probe'])
         if subprocess.check_output([str(exe)],text=True).strip()!='43' or cp.digest(obj)==descriptor['sha256']:
             raise RuntimeError('Restored dependency tracking did not rebuild the changed header')
-        evidence={'native_fixture':True,'fresh_runner_object_reuse':True,
+        evidence={'producer_image':descriptor['producer_image'],
+                  'consumer_image':os.environ.get('ImageVersion'),
+                  'host_toolchain_sha256':identity.get('host_toolchain_sha256'),
+                  'native_fixture':True,'fresh_runner_object_reuse':True,
                   'changed_header_recompiled':True,'internal_symlinks_restored':True,
                   'telemetry_credentials_omitted':True,'symlink_timestamps_preserved':True,'engine_build_verified':False}
         Path('checkpoint-probe-result.json').write_text(json.dumps(evidence,indent=2)+'\n')

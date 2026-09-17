@@ -129,8 +129,9 @@ def verify_stable(run: dict, repo: str, api=shared.gh_json) -> None:
 def checkpoint_input_identity(identity: dict, run: dict) -> tuple[dict, dict | None]:
     """Only the committed, exact one-step migration may consume an old recipe.
 
-    Work path, image, branch, repository, archive schema and POSIX policy are NOT
-    relaxed. Missing artifacts still fail; this is not a search/downgrade loop.
+    Work path, branch, repository, archive schema and POSIX policy remain exact.
+    An optional reviewed Windows image transition additionally requires native
+    content fingerprints. Missing artifacts never trigger a search/cold fallback.
     """
     path = ROOT/'vcpkg/static/checkpoint-migrations.json'
     document = json.loads(path.read_text(encoding='utf-8'))
@@ -147,7 +148,13 @@ def checkpoint_input_identity(identity: dict, run: dict) -> tuple[dict, dict | N
     migration = matches[0]
     if not re.fullmatch(r'[0-9a-f]{64}', migration['from_recipe']):
         raise ValueError('Invalid old recipe digest')
-    return dict(identity, recipe=migration['from_recipe']), migration
+    input_identity = dict(identity, recipe=migration['from_recipe'])
+    if 'image_transition' in migration:
+        import runner_image_migration
+        input_identity = runner_image_migration.input_identity(
+            input_identity, migration['image_transition'],
+            ROOT/'static-diagnostics/resume/runner-image-transition.json')
+    return input_identity, migration
 
 
 def restore_selected(adapter, work: Path, package: Path, identity: dict, run: dict,
