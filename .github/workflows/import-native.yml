@@ -27,7 +27,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build xvfb xauth libglib2.0-dev libnss3-dev libnspr4-dev libatk1.0-dev libatk-bridge2.0-dev libcups2-dev libx11-dev libxcomposite-dev libxdamage-dev libxext-dev libxfixes-dev libxrandr-dev libxrender-dev libxtst-dev libxi-dev libxkbcommon-dev libgbm-dev libdrm-dev libexpat1-dev uuid-dev libxcb1-dev libpci-dev libudev-dev libcairo2-dev libpango1.0-dev libasound2-dev zlib1g-dev libatspi2.0-dev
+          sudo apt-get install -y ninja-build xvfb xauth libglib2.0-dev libnss3-dev libnspr4-dev libatk1.0-dev libatk-bridge2.0-dev libcups2-dev libx11-dev libxcomposite-dev libxdamage-dev libxext-dev libxfixes-dev libxrandr-dev libxrender-dev libxtst-dev libxi-dev libxkbcommon-dev libgbm-dev libdrm-dev libexpat1-dev uuid-dev libxcb1-dev libpci-dev libudev-dev libcairo2-dev libpango1.0-dev libasound2-dev zlib1g-dev libatspi2.0-dev libxshmfence-dev
       - name: Import locked release and run a newly linked relocated application
         run: python vcpkg/integration/native_import_test.py --work "${{ runner.temp }}/cef-import-native" --evidence "${{ github.workspace }}/static-diagnostics/import-native"
       - name: Preserve public runtime evidence only

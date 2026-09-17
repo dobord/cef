@@ -33,6 +33,7 @@ def main() -> None:
     prefix = work / "imported-sdk"
     acquisition = sdk_import.install_bundle(lock, triplet, transport, prefix)
     (evidence / "acquisition.json").write_bytes(sdk_import.sdk.json_bytes(acquisition))
+    shutil.copyfile(prefix / "share/cef-static/static-link-inventory.json", evidence / "upstream-link-inventory.json")
     shutil.rmtree(work / "download")
     build = work / "consumer"
     command = ["cmake", "-S", ROOT / "vcpkg/static/consumer", "-B", build,
