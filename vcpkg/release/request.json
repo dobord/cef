@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "sequence": 1,
+  "producer_run": 35179388662,
+  "producer_attempt": 1,
+  "producer_commit": "bd0f30183448eca4c3be183af644baeb94116bce",
+  "producer_branch": "static-engine",
+  "tag": "cef-152.0.6-static-capi-r35179388662-a1",
+  "prerelease": true
+}

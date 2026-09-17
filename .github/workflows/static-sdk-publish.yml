@@ -1,0 +1,61 @@
+name: Publish verified CEF SDKs (no engine rebuild)
+on:
+  push:
+    branches: [static-engine]
+    paths:
+      - 'vcpkg/release/**'
+      - '.github/workflows/static-sdk-publish.yml'
+  pull_request:
+    branches: [static-engine]
+    paths:
+      - 'vcpkg/release/**'
+      - '.github/workflows/static-sdk-publish.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: cef-static-sdk-promotion
+  cancel-in-progress: false
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test producer, artifact, tag, draft and upload policies
+        run: python -m unittest discover -s vcpkg/release/tests -v
+      - name: Check publication code syntax
+        run: python -m compileall -q vcpkg/release
+  publish:
+    needs: contract
+    if: github.repository == 'dobord/cef' && github.ref == 'refs/heads/static-engine' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify original SDK pair, upload a draft and publish only after remote digest checks
+        run: >-
+          python vcpkg/release/publish_sdk.py
+          --request vcpkg/release/request.json
+          --workspace "${{ runner.temp }}/cef-sdk-promotion-${{ github.run_id }}-${{ github.run_attempt }}"
+          --proof publication-proof
+          --apply
+      - name: Preserve promotion evidence, including failure details
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cef-sdk-publication-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-proof/
+          retention-days: 30
+          if-no-files-found: error
