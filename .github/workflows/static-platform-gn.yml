@@ -2,10 +2,10 @@ name: Static platform GN target-prefix regression
 on:
   push:
     branches: [feature/vcpkg-static-integration]
-    paths: ['vcpkg/ports/cef-static/source_build.py', 'vcpkg/integration/driver.py', 'vcpkg/integration/tests/test_platform*.py', 'vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
+    paths: ['vcpkg/ports/cef-static/source_build.py', 'vcpkg/ports/cef-static/export_static.py', 'vcpkg/integration/driver.py', 'vcpkg/integration/tests/test_platform*.py', 'vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
   pull_request:
     branches: [static-engine]
-    paths: ['vcpkg/ports/cef-static/source_build.py', 'vcpkg/integration/driver.py', 'vcpkg/integration/tests/test_platform*.py', 'vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
+    paths: ['vcpkg/ports/cef-static/source_build.py', 'vcpkg/ports/cef-static/export_static.py', 'vcpkg/integration/driver.py', 'vcpkg/integration/tests/test_platform*.py', 'vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
 permissions:
   contents: read
 concurrency:

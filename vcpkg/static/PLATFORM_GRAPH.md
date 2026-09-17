@@ -73,11 +73,41 @@ This does not enable the builder's `static-third-party` production profile.
 The installed full dependency prefix, actual Chromium GN generation and final
 link/runtime modules must still be qualified together. The existing release
 receipt is engine-static and cannot certify these new build inputs. The signed
-builder plan, package installer and relocatable external-archive export still
-need integration before this can become a source-built SDK profile.
+builder plan and package installer still need integration before this can
+become a source-built SDK profile.
 
 GBM/DRI drivers, NSS external PKCS11 modules, GLib/GIO modules, X11 locale modules
 and ALSA plugins need runtime policy and tests beyond archive validation. The
 catalog deliberately continues to require GBM rather than replacing it with an
 empty stub or disabling graphics to make a check pass. CUPS TLS must remain real;
 using OpenSSL together with Chromium's BoringSSL requires symbol/ABI review.
+
+## Relocatable export of a platform-built engine
+
+After native source verification, pass the same three frozen inputs to
+`vcpkg/ports/cef-static/export_static.py`, in addition to `--source`, `--out`,
+`--diagnostics` and an empty `--prefix` package directory. The reference receipt
+must bind those exact inputs and the actual GN graph. A platform-built workspace
+cannot silently use the engine-only exporter; an engine-only receipt cannot be
+upgraded by supplying a new manifest.
+
+The exporter owns only Chromium/CEF archives. External archives stay in their
+vcpkg dependency packages; the resulting CMake configuration references their
+relative installed paths and verifies their recorded SHA-256 at configuration.
+The SDK must export CEF **and** those exact dependency packages under the same
+triplet prefix. Merely copying the CEF package alone is intentionally incomplete.
+Engine and platform archives share one RESCAN group, including back-references
+from a platform library into the engine. No system `find_library` fallback is
+used. Missing or changed dependency archives are errors before linking.
+
+`platform-build-inputs.json` preserves the original manifest. The separate
+`static-platform-inventory.json` records the archives actually used by the
+engine. Neither metadata file grants runtime qualification. Exported CMake
+reports `static-platform-experimental` and leaves
+`CEF_STATIC_PLATFORM_RUNTIME_QUALIFIED` false.
+
+The export regression uses real native C archives and Ninja, a synthetic CEF
+receipt explicitly confined to a test fixture, and a separately configured
+CMake consumer. It hides the producer source, package and dependency prefix,
+checks a cyclic engine/platform link, executes it, then verifies that missing
+and modified dependencies are refused. It is not a Chromium runtime test.

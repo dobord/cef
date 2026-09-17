@@ -336,10 +336,17 @@ def windows_archive_targets(names: list[str]) -> list[str]:
     return lines
 
 
-def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
+def export(source: Path, out: Path, diagnostics: Path, prefix: Path,
+           *, platform_inputs: dict | None = None) -> None:
     windows = os.name == 'nt'
     receipt = json.loads((diagnostics/'engine-build-receipt.json').read_text())
     verify_reference(receipt)
+    # Validate the selected platform and actual GN graph before creating output.
+    graph = json.loads((diagnostics/'gn-graph.json').read_text())
+    root = graph['//cef:cef_static_smoke']
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'static'))
+    from platform_export import prepare as prepare_platform
+    platform = prepare_platform(platform_inputs, receipt, root, source, out)
     if prefix.exists() and any(prefix.iterdir()):
         raise RuntimeError('SDK destination must be empty')
     prefix.mkdir(parents=True, exist_ok=True)
@@ -354,13 +361,18 @@ def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
     query = run([ninja, '-C', out, '-t', 'query', exe_name], source)
     (share/'native-link-edge.txt').write_text(query)
     files = query_link_inputs(query)
-    graph = json.loads((diagnostics/'gn-graph.json').read_text())
-    root = graph['//cef:cef_static_smoke']
     objects, archives, resources, system_libs, manifest = [], [], [], [], []
     excluded_smoke = []
     seen: set[Path] = set()
     def add_input(value: str) -> None:
-        path = (source/value[2:] if value.startswith('//') else out/value).resolve()
+        raw = source/value[2:] if value.startswith('//') else out/value
+        path = raw.resolve()
+        if platform is not None and path.is_relative_to(platform.prefix):
+            # Reject aliases even if their destination is a captured archive.
+            if any(p.is_symlink() for p in (raw, *raw.parents)):
+                raise RuntimeError('Redirected external native link input: '+value)
+            platform.owns(path)
+            return
         if path in seen:
             return
         if not path.is_file() or not path.is_relative_to(source):
@@ -442,6 +454,12 @@ def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
         else:
             cmake += [f'add_library({target} STATIC IMPORTED GLOBAL)',
                       f'set_property(TARGET {target} PROPERTY IMPORTED_LOCATION "${{_cef_static_prefix}}/lib/cef-static/{name}")']
+    if platform is not None:
+        platform_cmake, platform_targets = platform.cmake()
+        cmake += platform_cmake
+        # Use one RESCAN group so back-references across the engine/platform
+        # boundary work with GNU ld as well as the native LLD build.
+        library_targets += platform_targets
     if windows:
         cmake += windows_archive_targets(windows_archive_names)
         dependencies += library_targets
@@ -512,6 +530,9 @@ def export(source: Path, out: Path, diagnostics: Path, prefix: Path) -> None:
                  'package_files':[{'path':p.relative_to(prefix).as_posix(),'sha256':sha256(p)}
                                   for p in sorted(prefix.rglob('*')) if p.is_file() and
                                   p.is_relative_to(lib)]}
+    if platform is not None:
+        platform.finish()
+        inventory['platform'] = platform.write_inventory(share)
     (share/'static-link-inventory.json').write_text(json.dumps(inventory,indent=2)+'\n')
     print(f'Exported static link closure: {len(objects)} forced objects, {len(archives)} static archives')
     print('External SDK consumer link/run is still REQUIRED before publication')
@@ -523,8 +544,18 @@ def main() -> None:
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--diagnostics',type=Path,required=True)
     p.add_argument('--prefix',type=Path,required=True)
+    p.add_argument('--platform-manifest', type=Path)
+    p.add_argument('--platform-prefix', type=Path)
+    p.add_argument('--platform-sha256')
     a=p.parse_args()
-    export(a.source.resolve(),a.out.resolve(),a.diagnostics.resolve(),a.prefix.resolve())
+    supplied = (a.platform_manifest is not None, a.platform_prefix is not None, a.platform_sha256 is not None)
+    if any(supplied) and not all(supplied):
+        p.error('All three platform export inputs are required together')
+    selection = None if not any(supplied) else {
+        'manifest': str(a.platform_manifest.resolve()),
+        'prefix': str(a.platform_prefix.resolve()), 'sha256': a.platform_sha256}
+    export(a.source.resolve(),a.out.resolve(),a.diagnostics.resolve(),a.prefix.resolve(),
+           platform_inputs=selection)
 
 if __name__=='__main__':
     main()
