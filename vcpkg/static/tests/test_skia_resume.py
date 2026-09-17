@@ -175,6 +175,8 @@ class MigrationTests(unittest.TestCase):
         for m in LEGACY_MIGRATIONS:
             codec = linux_checkpoint if m['platform'] == 'linux-x64' else checkpoint
             with self.subTest(platform=m['platform']), tempfile.TemporaryDirectory() as td:
+                if codec is linux_checkpoint and sys.platform != 'linux':
+                    self.skipTest('Linux archive codec requires a native Linux host')
                 root = Path(td); source = root/'source'; source.mkdir()
                 (source/'object.o').write_bytes(b'synthetic-object-not-a-CEF-build')
                 target = root/'restored'
