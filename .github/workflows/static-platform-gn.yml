@@ -1,0 +1,37 @@
+name: Static platform GN target-prefix regression
+on:
+  push:
+    branches: [feature/vcpkg-static-integration]
+    paths: ['vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
+  pull_request:
+    branches: [static-engine]
+    paths: ['vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
+permissions:
+  contents: read
+concurrency:
+  group: static-platform-gn-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install native linker and fixture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lld ninja-build pkg-config
+      - name: Validate real ELF archive contracts
+        run: python -I -m unittest discover -s vcpkg/static/tests -p 'test_platform*.py' -v
+      - name: Generate link and run cyclic archives with exact upstream GN template
+        run: python vcpkg/static/native_platform_test.py --work "${{ runner.temp }}/gn-platform" --evidence "${{ runner.temp }}/gn-evidence"
+      - name: Preserve explicit fixture evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: static-platform-gn-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gn-evidence/
+          retention-days: 7
+          if-no-files-found: warn
