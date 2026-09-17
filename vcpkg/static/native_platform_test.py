@@ -18,7 +18,7 @@ GN_URL = 'https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/fj2NZ
 GN_SHA512 = 'd49575bd383b6aace1257a6e9439ce0a206173ec2cab94d5312f06db412e09c89aa75b1f4c69f5dca4389d15a489c211a73439a66f437c34b18bc90eefa0b775'
 
 
-def acquire(evidence: Path) -> tuple[Path, bytes]:
+def acquire(evidence: Path) -> tuple[Path, dict[str, bytes]]:
     archive = evidence/'gn-linux-amd64.zip'
     if not archive.exists():
         with urllib.request.urlopen(GN_URL, timeout=120) as response:
@@ -93,10 +93,9 @@ def main():
     # Minimal GN build rules around the REAL patched Chromium pkg_config.gni.
     # The three direct call-site transforms were hash checked, but this fixture
     # does not evaluate Chromium's entire printing/audio component graph.
-    write('.gn','buildconfig = "//build/BUILDCONFIG.gn"\n')
+    write('.gn', 'buildconfig = "//build/BUILDCONFIG.gn"\n'
+          'default_args = {\n  target_os = "linux"\n  target_cpu = "x64"\n}\n')
     write('build/BUILDCONFIG.gn', '''declare_args() {
-  target_os = "linux"
-  target_cpu = "x64"
   use_lld = true
   use_sysroot = false
   use_remoteexec = false
@@ -156,12 +155,24 @@ if (current_toolchain == default_toolchain) {
     run([gn,'gen',out,'--fail-on-unused-args'],source)
     graph=json.loads(run([gn,'desc',out,'//:probe','--format=json'],source))['//:probe']
     proof=gn_bridge.audit_graph(graph,source,out,prefix,full)
+    expected_archives = [str(prefix/'lib/liba.a'), str(prefix/'lib/libb.a')]
+    contract.require(graph['libs'] == expected_archives, 'GN lost absolute archive ordering')
+    contract.require(graph.get('lib_dirs', []) == [], 'Unexpected target library search')
+    contract.require(graph['ldflags'] == ['-pthread'], 'GN dropped static link flags')
+    host_graph=json.loads(run([gn,'desc',out,'//:host_probe(//toolchain:host)','--format=json'],source))
+    host_target=next(iter(host_graph.values()))
+    contract.require(not host_target.get('libs'), 'Host toolchain consumed target archives')
     run(['ninja','-C',out,'all']);run([out/'probe']);run([out/'host/host_probe'])
+    obj=out/'obj/probe.main.o'
+    unchanged=(obj.stat().st_mtime_ns,contract.digest(obj))
+    run(['ninja','-C',out,'all'])
+    contract.require(unchanged==(obj.stat().st_mtime_ns,contract.digest(obj)),
+                     'Unchanged GN/Ninja iteration rebuilt a completed object')
     # GN's regeneration dependencies bind the frozen header bytes.
     (prefix/'include/value.h').write_text('int other(void);\n')
-    run([gn,'gen',out],source,ok=False)
+    run(['ninja','-C',out,'all'],source,ok=False)
     proof.update(native_fixture=True,host_toolchain_isolated=True,cycle_link_executed=True,
-                 changed_header_rejected=True,chromium_build_verified=False,
+                 changed_header_rejected=True,unchanged_object_reused=True,chromium_build_verified=False,
                  gn_sha256=contract.digest(gn),gn_version=run([gn,'--version']).strip())
     (evidence/'native-platform.json').write_bytes(contract.canonical(proof))
     print('GN_STATIC_TARGET_PREFIX_FIXTURE_VERIFIED; NOT_A_CEF_BUILD',flush=True)
