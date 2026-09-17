@@ -135,8 +135,8 @@ def selected_member(name: str, package_name: str, source_triplet: str) -> PurePo
         raise ValueError("Unexpected file in CEF package prefix: " + str(relative))
     require(relative.suffix.lower() not in {".c", ".cc", ".cpp", ".cxx", ".pdb", ".o", ".obj", ".dll", ".so"},
             "Implementation, debug or shared runtime file in SDK payload")
-    require(not any(p.casefold() in {".git", "downloads", "buildtrees", "debug"} for p in relative.parts),
-            "Workspace data in CEF payload")
+    require(not any(p.casefold() in {".git", "downloads", "buildtrees"} for p in relative.parts),
+            "Workspace data in CEF payload: " + str(relative))
     return relative
 
 
