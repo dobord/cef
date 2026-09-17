@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Two-runner native archive fixture. This does not build or certify CEF."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,38 @@ import sys
 import checkpoint as cp
 import runner_fingerprint
 import runner_image_migration
+
+
+# This scope belongs only to the hard-coded CMake/Ninja C fixture below.
+# Real CEF checkpoint/image migration continues to use the full host inventory.
+NINJA_C_PROFILE = 'native-ninja-c-v1'
+NINJA_C_REQUIRED_COMPONENTS = frozenset({
+    'cmake-bin', 'cmake-share', 'git-bin', 'git-cmd', 'git-core',
+    'msvc', 'vc-build', 'vc-include', 'ninja', 'vswhere',
+    'sdk-bin', 'sdk-include', 'sdk-lib', 'netfx-sdk',
+    'python-exe', 'python-dlls', 'python-stdlib',
+})
+
+
+def fixture_toolchain_digest(host: dict) -> str:
+    """Exclude only unused MSBuild from this native C/Ninja fixture's identity.
+
+    Keep the full, validated inventory in the host evidence. CMake is explicitly
+    invoked with -G Ninja, and the fixture has no MSBuild/custom build steps.
+    Hash every other component (including unknown future ones) conservatively.
+    This is not an admission rule for Chromium checkpoints.
+    """
+    runner_image_migration.checked_digest(host)
+    components = host['components']
+    missing = NINJA_C_REQUIRED_COMPONENTS - components.keys()
+    if missing:
+        raise ValueError('Incomplete native C/Ninja inventory: ' + ', '.join(sorted(missing)))
+    if not any(name.startswith('python-python') and name.endswith('.dll')
+               for name in components):
+        raise ValueError('Missing native Python runtime inventory')
+    selected = {name: value for name, value in components.items() if name != 'msbuild'}
+    return hashlib.sha256(runner_fingerprint.json_bytes({
+        'profile': NINJA_C_PROFILE, 'components': selected})).hexdigest()
 
 
 def native_ninja():
@@ -36,7 +69,9 @@ def fixture_identity(work, host=None):
     identity = {'recipe': 'native-archive-fixture-v4-host-content',
                 'work': str(work.resolve()), 'os': os.name}
     if os.name == 'nt':
-        identity['host_toolchain_sha256'] = runner_image_migration.checked_digest(
+        identity['recipe'] = 'native-archive-fixture-v5-ninja-c-content'
+        identity['host_toolchain_profile'] = NINJA_C_PROFILE
+        identity['host_toolchain_sha256'] = fixture_toolchain_digest(
             host if host is not None else runner_fingerprint.collect())
     else:
         # Linux retains its existing image-bound policy.

@@ -26,6 +26,18 @@ def observed():
             'sha256': hashlib.sha256(fp.json_bytes(components)).hexdigest()}
 
 
+def fixture_observed():
+    names = probe.NINJA_C_REQUIRED_COMPONENTS | {'msbuild', 'python-python312.dll'}
+    components = {name: {'path': 'C:/reviewed/' + name, 'files': 1,
+                  'bytes': 10, 'sha256': 'a'*64} for name in names}
+    return reseal({'schema': 1, 'components': components})
+
+
+def reseal(host):
+    host['sha256'] = hashlib.sha256(fp.json_bytes(host['components'])).hexdigest()
+    return host
+
+
 def transition():
     return {'from_image': '20260907.297.1', 'to_image': '20260913.307.1',
             'toolchain_sha256': observed()['sha256'],
@@ -168,16 +180,95 @@ class MigrationTests(unittest.TestCase):
 
 
 class FixtureIdentityTests(unittest.TestCase):
+    def test_msbuild_drift_is_scoped_to_native_c_ninja_fixture(self):
+        before = fixture_observed(); original = copy.deepcopy(before)
+        changed = copy.deepcopy(before)
+        changed['components']['msbuild'].update(bytes=20, sha256='b'*64)
+        reseal(changed)
+        self.assertNotEqual(migration.checked_digest(before), migration.checked_digest(changed))
+        self.assertEqual(probe.fixture_toolchain_digest(before), probe.fixture_toolchain_digest(changed))
+        self.assertEqual(before, original)  # Full evidence must not be rewritten.
+        self.assertIn('msbuild', before['components'])
+
+    def test_every_other_component_is_still_identity_relevant(self):
+        before = fixture_observed()
+        for name in before['components'].keys() - {'msbuild'}:
+            for field, value in [('path', 'C:/different'), ('files', 2),
+                                 ('bytes', 11), ('sha256', 'b'*64)]:
+                changed = copy.deepcopy(before); changed['components'][name][field] = value
+                with self.subTest(component=name, field=field):
+                    self.assertNotEqual(probe.fixture_toolchain_digest(before),
+                                        probe.fixture_toolchain_digest(reseal(changed)))
+
+    def test_unknown_components_are_not_silently_excluded(self):
+        before = fixture_observed(); changed = copy.deepcopy(before)
+        changed['components']['future-build-tool'] = dict(before['components']['msvc'])
+        self.assertNotEqual(probe.fixture_toolchain_digest(before),
+                            probe.fixture_toolchain_digest(reseal(changed)))
+
+    def test_incomplete_or_tampered_inventory_fails(self):
+        before = fixture_observed()
+        for name in before['components'].keys() - {'msbuild'}:
+            changed = copy.deepcopy(before); del changed['components'][name]
+            with self.subTest(missing=name), self.assertRaises(ValueError):
+                probe.fixture_toolchain_digest(reseal(changed))
+        changed = copy.deepcopy(before); changed['components']['msbuild']['sha256'] = 'b'*64
+        with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+            probe.fixture_toolchain_digest(changed)
+        changed = copy.deepcopy(before); changed['components']['msbuild']['bytes'] = -1
+        with self.assertRaisesRegex(ValueError, 'Invalid host toolchain component'):
+            probe.fixture_toolchain_digest(reseal(changed))
+
+    def test_fixture_profile_is_domain_separated_from_full_host_digest(self):
+        host = fixture_observed()
+        selected = {name: value for name, value in host['components'].items() if name != 'msbuild'}
+        self.assertNotEqual(probe.fixture_toolchain_digest(host), migration.checked_digest(host))
+        self.assertNotEqual(probe.fixture_toolchain_digest(host),
+                            hashlib.sha256(fp.json_bytes(selected)).hexdigest())
+
+    def test_real_cef_migration_still_rejects_msbuild_drift(self):
+        before = fixture_observed(); changed = copy.deepcopy(before)
+        changed['components']['msbuild']['sha256'] = 'b'*64
+        reseal(changed)
+        review = dict(transition(), toolchain_sha256=before['sha256'])
+        with tempfile.TemporaryDirectory() as td:
+            receipt = Path(td)/'receipt.json'
+            with self.assertRaisesRegex(ValueError, 'Host build inputs differ'):
+                migration.input_identity({'platform': 'windows-x64', 'image': review['to_image']},
+                                         review, receipt, collect=lambda: changed)
+            self.assertEqual(json.loads(receipt.read_text())['status'], 'failed')
+
+    def test_real_archive_keeps_strict_fixture_identity(self):
+        before = fixture_observed(); changed = copy.deepcopy(before)
+        changed['components']['msbuild']['sha256'] = 'b'*64; reseal(changed)
+        identity = {'recipe': 'native-archive-fixture-v5-ninja-c-content',
+                    'host_toolchain_profile': probe.NINJA_C_PROFILE,
+                    'host_toolchain_sha256': probe.fixture_toolchain_digest(before)}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); source = root/'source'; source.mkdir()
+            (source/'object').write_bytes(b'completed object')
+            package = root/'checkpoint'; checkpoint.save(source, package, identity, limit=64)
+            target = root/'restored'
+            checkpoint.restore(package, target, dict(identity,
+                host_toolchain_sha256=probe.fixture_toolchain_digest(changed)))
+            self.assertEqual((target/'object').read_bytes(), b'completed object')
+            for field, value in [('recipe', 'native-archive-fixture-v4-host-content'),
+                                 ('host_toolchain_profile', 'cef-engine'),
+                                 ('host_toolchain_sha256', '0'*64)]:
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'identity/schema mismatch'):
+                    checkpoint.restore(package, root/'rejected', dict(identity, **{field: value}))
+                self.assertFalse((root/'rejected').exists())
+
     @unittest.skipUnless(os.name == 'nt', 'Native Windows fixture identity')
     def test_windows_rollout_requires_equal_content_not_equal_image_labels(self):
         work = Path(tempfile.gettempdir())/'fixture'
         with mock.patch.dict(os.environ, {'ImageVersion':'20260907.297.1'}):
-            before = probe.fixture_identity(work, observed())
+            before = probe.fixture_identity(work, fixture_observed())
         with mock.patch.dict(os.environ, {'ImageVersion':'20260913.307.1'}):
-            after = probe.fixture_identity(work, observed())
+            after = probe.fixture_identity(work, fixture_observed())
         self.assertEqual(before, after)
         self.assertNotIn('image', before)
-        changed = observed(); changed['components']['test-compiler']['sha256'] = 'b'*64
+        changed = fixture_observed(); changed['components']['msvc']['sha256'] = 'b'*64
         changed['sha256'] = hashlib.sha256(fp.json_bytes(changed['components'])).hexdigest()
         self.assertNotEqual(before, probe.fixture_identity(work, changed))
 
