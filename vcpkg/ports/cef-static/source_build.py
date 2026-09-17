@@ -396,9 +396,43 @@ def upgrade_x11_recipe(source: Path, logs: Path, previous: str, recipe: str) -> 
     os.replace(temporary, marker)
 
 
-def configuration(source: Path, logs: Path) -> Path:
+def platform_selection(manifest: Path | None, prefix: Path | None, sha256: str | None) -> dict | None:
+    """An explicit, immutable target graph; never inferred from the environment."""
+    if manifest is None and prefix is None and sha256 is None:
+        return None
+    if manifest is None or prefix is None or sha256 is None or WINDOWS:
+        raise ValueError('All platform inputs are required for native Linux only')
+    if not re.fullmatch(r'[0-9a-f]{64}', sha256):
+        raise ValueError('Explicit platform SHA256 required')
+    return {'manifest': str(manifest.resolve()), 'prefix': str(prefix.resolve()), 'sha256': sha256}
+
+
+def platform_command(source: Path, selection: dict) -> list:
+    if set(selection) != {'manifest', 'prefix', 'sha256'}:
+        raise ValueError('Unknown platform selection fields')
+    checked = platform_selection(Path(selection['manifest']), Path(selection['prefix']), selection['sha256'])
+    return python_script(HERE.parents[1]/'static/gn_platform.py', '--source', source,
+                         '--manifest', checked['manifest'], '--prefix', checked['prefix'],
+                         '--sha256', checked['sha256'])
+
+
+def configuration(source: Path, logs: Path, *, platform_inputs: dict | None = None) -> Path:
     cef = source/'cef'
-    out = source/'out/CEF_Static_Release_x64'
+    bound = source/'cef-static-platform-gn.json'
+    # Profile changes are not checkpoint migrations. Keep the original source
+    # tree and objects intact; require an explicit new workspace for first use.
+    if platform_inputs is None and bound.exists():
+        raise ValueError('Bound static-platform workspace requires explicit platform inputs')
+    out = source/'out'/('CEF_Static_Platform_Release_x64' if platform_inputs else 'CEF_Static_Release_x64')
+    if platform_inputs is not None:
+        platform_command(source, platform_inputs)  # Validate before source edits.
+        if not bound.exists() and (source/'out/CEF_Static_Release_x64').exists():
+            raise ValueError('Use a fresh source workspace; engine-only checkpoint migration is not implicit')
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs/'platform-graph-receipt.json').unlink(missing_ok=True)
+    if platform_inputs is not None:
+        run(platform_command(source, platform_inputs) + ['--validate-inputs'],
+            source, logs, 'validate-static-platform', timeout=1200)
     recipe = hashlib.sha256((HERE/'patch_source.py').read_bytes()+
                             (HERE/'smoke.c').read_bytes()).hexdigest()
     marker = source/'cef-static-patched.json'
@@ -423,6 +457,10 @@ def configuration(source: Path, logs: Path) -> Path:
     run(python_script(HERE/'skia_x11_link.py', '--source', source,
                       '--receipt', logs/'skia-x11-link.json'),
         source, logs, 'skia-x11-link')
+    platform_args = {}
+    if platform_inputs is not None:
+        platform_args = json.loads(run(platform_command(source, platform_inputs),
+                                       source, logs, 'bind-static-platform', timeout=1200))
     spec = importlib.util.spec_from_file_location('cef_gn_args', cef/'tools/gn_args.py')
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -441,9 +479,12 @@ def configuration(source: Path, logs: Path) -> Path:
                     ozone_platform_x11=True, ozone_platform_wayland=False)
     if shutil.which('ccache'):
         args['cc_wrapper'] = 'ccache'
+    args.update(platform_args)
     merged = static_profile(module.GetConfigArgs(module.GetMergedArgs(args), False, 'x64'), WINDOWS)
     out.mkdir(parents=True, exist_ok=True)
-    (out/'args.gn').write_text(module.GetConfigFileContents(merged)+'\n', newline='\n')
+    contents = module.GetConfigFileContents(merged)+'\n'
+    if not (out/'args.gn').exists() or (out/'args.gn').read_text() != contents:
+        (out/'args.gn').write_text(contents, newline='\n')
     shutil.copy2(out/'args.gn', logs/'args.gn')
     gn = find_binary(source, ['buildtools/win/gn.exe'] if WINDOWS else ['buildtools/linux64/gn'])
     run(gn_generate_command(gn, out), source, logs, 'gn-gen', timeout=1200)
@@ -460,6 +501,11 @@ def configuration(source: Path, logs: Path) -> Path:
     graph = run([gn, 'desc', out, '//cef:cef_static_smoke', '--format=json'],
                 source, logs, 'gn-graph', timeout=300, quiet=True)
     (logs/'gn-graph.json').write_text(graph)
+    if platform_inputs is not None:
+        audit = run(platform_command(source, platform_inputs) +
+                    ['--verify-graph', logs/'gn-graph.json', '--out', out],
+                    source, logs, 'audit-static-platform', timeout=1200)
+        (logs/'platform-graph-receipt.json').write_text(audit)
     ninja = find_binary(source, ['third_party/ninja/ninja.exe'] if WINDOWS else
                         ['third_party/ninja/ninja'])
     executable = 'cef_static_smoke.exe' if WINDOWS else 'cef_static_smoke'
@@ -584,12 +630,12 @@ def stage_runtime_data(out: Path, deploy: Path, logs: Path) -> None:
     receipt.write_text(json.dumps({'schema': 1, 'files': files,
         'engine_runtime_verified': False}, indent=2)+'\n', encoding='utf-8')
 
-def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
+def compile_and_test(source: Path, work: Path, logs: Path, jobs: int, *, platform_inputs: dict | None = None) -> None:
     # An unsuccessful retry must not leave a previous success receipt behind.
     (logs/'engine-build-receipt.json').unlink(missing_ok=True)
     if WINDOWS:
         ensure_windows_dumpbin(source, work, logs)
-    out = configuration(source, logs)
+    out = configuration(source, logs, platform_inputs=platform_inputs)
     ninja = find_binary(source, ['third_party/ninja/ninja.exe'] if WINDOWS else ['third_party/ninja/ninja'])
     run([ninja, '-C', out, '-j', str(jobs), '-d', 'keeprsp', 'cef_static_smoke'],
         source, logs, 'engine-build', timeout=build_timeout())
@@ -615,6 +661,11 @@ def compile_and_test(source: Path, work: Path, logs: Path, jobs: int) -> None:
                'swiftshader_enabled': False, 'system_fxc': WINDOWS,
                'integration_commit': os.environ.get('GITHUB_SHA'),
                'executable_sha256': digest(deploy/exe.name)}
+    if platform_inputs is not None:
+        receipt['platform_build_inputs'] = dict(platform_inputs)
+        receipt['platform_graph'] = json.loads((logs/'platform-graph-receipt.json').read_text())
+        # A native reference smoke does not qualify all dynamically loaded modules.
+        receipt['platform_runtime_qualified'] = False
     (logs/'engine-build-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
     shutil.rmtree(deploy)  # This directory was created by this invocation only.
     print('STATIC_ENGINE_CAPI_REFERENCE_VERIFIED', flush=True)
@@ -626,7 +677,13 @@ def main() -> None:
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--logs', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=positive_env('CEF_STATIC_JOBS', 4, 1024))
+    parser.add_argument('--platform-manifest', type=Path)
+    parser.add_argument('--platform-prefix', type=Path)
+    parser.add_argument('--platform-sha256')
     args = parser.parse_args()
+    selected = platform_selection(args.platform_manifest, args.platform_prefix, args.platform_sha256)
+    if selected is not None and args.phase not in ('check', 'regressions', 'build'):
+        parser.error('Platform inputs are only accepted by check, regressions and build')
     if not 1 <= args.jobs <= 1024:
         parser.error('--jobs must be between 1 and 1024')
     build_timeout()  # Validate before downloading or changing source files.
@@ -634,6 +691,9 @@ def main() -> None:
         raise RuntimeError('Only native Windows/Linux x64 builds are supported')
     work, logs = args.work.resolve(), args.logs.resolve()
     work.mkdir(parents=True, exist_ok=True); logs.mkdir(parents=True, exist_ok=True)
+    if selected is not None:
+        run(platform_command(work, selected) + ['--validate-inputs'],
+            work, logs, 'validate-static-platform', timeout=1200)
     setup_environment(work)
     if args.phase == 'tools':
         check_tools(work, logs)
@@ -642,7 +702,7 @@ def main() -> None:
     if args.phase in ('check', 'regressions'):
         if WINDOWS:
             ensure_windows_dumpbin(source, work, logs)
-        out = configuration(source, logs)
+        out = configuration(source, logs, platform_inputs=selected)
         if args.phase == 'regressions':
             # Object targets can depend on almost the entire engine through
             # generated-header/order-only edges. This is NOT a cheap preflight.
@@ -653,7 +713,7 @@ def main() -> None:
                 'engine_link_verified': False, 'engine_runtime_verified': False,
             }, indent=2)+'\n')
     if args.phase == 'build':
-        compile_and_test(source, work, logs, args.jobs)
+        compile_and_test(source, work, logs, args.jobs, platform_inputs=selected)
     print(json.dumps({'phase_completed': args.phase, 'source': str(source)}), flush=True)
 
 if __name__ == '__main__':

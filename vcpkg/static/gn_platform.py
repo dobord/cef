@@ -218,7 +218,28 @@ def main():
     p.add_argument('--manifest',type=Path,required=True)
     p.add_argument('--prefix',type=Path,required=True)
     p.add_argument('--sha256',required=True)
+    p.add_argument('--validate-inputs',action='store_true')
+    p.add_argument('--verify-graph',type=Path)
+    p.add_argument('--out',type=Path)
     args=p.parse_args()
-    print(json.dumps(bind(args.source,args.manifest,args.prefix,args.sha256),indent=2))
+    if bool(args.verify_graph) != bool(args.out):
+        p.error('--verify-graph and --out must be supplied together')
+    if args.validate_inputs:
+        if args.verify_graph or args.out:
+            p.error('Input validation cannot be combined with graph verification')
+        inputs(args.manifest,args.prefix,args.sha256)
+        print(json.dumps({'status':'verified-build-inputs','runtime_verified':False}))
+        return
+    selected = bind(args.source,args.manifest,args.prefix,args.sha256)
+    if args.verify_graph:
+        value = inputs(args.manifest,args.prefix,args.sha256)
+        graph = contract.decode(args.verify_graph.read_bytes())
+        contract.require(isinstance(graph,dict) and '//cef:cef_static_smoke' in graph,
+                         'Missing exact CEF root graph')
+        result = audit_graph(graph['//cef:cef_static_smoke'], args.source,args.out,args.prefix,value)
+        result['manifest_sha256'] = args.sha256
+        print(json.dumps(result,indent=2))
+    else:
+        print(json.dumps(selected,indent=2))
 
 if __name__ == '__main__': main()

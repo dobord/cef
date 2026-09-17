@@ -2,10 +2,10 @@ name: Static platform GN target-prefix regression
 on:
   push:
     branches: [feature/vcpkg-static-integration]
-    paths: ['vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
+    paths: ['vcpkg/ports/cef-static/source_build.py', 'vcpkg/integration/driver.py', 'vcpkg/integration/tests/test_platform*.py', 'vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
   pull_request:
     branches: [static-engine]
-    paths: ['vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
+    paths: ['vcpkg/ports/cef-static/source_build.py', 'vcpkg/integration/driver.py', 'vcpkg/integration/tests/test_platform*.py', 'vcpkg/static/*platform*.py', 'vcpkg/static/tests/test_platform*.py', '.github/workflows/static-platform-gn.yml']
 permissions:
   contents: read
 concurrency:
@@ -25,6 +25,8 @@ jobs:
           sudo apt-get install -y lld ninja-build pkg-config
       - name: Validate real ELF archive contracts
         run: python -I -m unittest discover -s vcpkg/static/tests -p 'test_platform*.py' -v
+      - name: Validate source-worker and checkpoint integration
+        run: python -I -m unittest discover -s vcpkg/integration/tests -v
       - name: Generate link and run cyclic archives with exact upstream GN template
         run: python vcpkg/static/native_platform_test.py --work "${{ runner.temp }}/gn-platform" --evidence "${{ runner.temp }}/gn-evidence"
       - name: Preserve explicit fixture evidence

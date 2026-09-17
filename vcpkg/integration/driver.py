@@ -39,18 +39,44 @@ def adapter():
     raise ValueError("Only native Windows/Linux x64 workers are supported")
 
 
-def identity(work: Path, contract: str) -> dict:
+def checked_platform(work: Path, selection: dict | None) -> dict | None:
+    if selection is None:
+        return None
+    if set(selection) != {"manifest", "prefix", "sha256"} or sys.platform != "linux":
+        raise ValueError("Explicit platform inputs require native Linux")
+    selected = build.platform_selection(Path(selection["manifest"]), Path(selection["prefix"]), selection["sha256"])
+    # Capture target headers/archives and their clocks in the SAME checkpoint.
+    # A fresh dependency extraction outside it would invalidate Ninja's deps log.
+    root = work.resolve()
+    for key in ("manifest", "prefix"):
+        path = Path(selected[key])
+        if not path.is_relative_to(root) or path == root:
+            raise ValueError("Platform inputs must be inside the checkpoint workspace")
+    if Path(selected["manifest"]).is_relative_to(Path(selected["prefix"])):
+        raise ValueError("Keep the contract outside the captured target prefix")
+    return selected
+
+
+def identity(work: Path, contract: str, platform_inputs: dict | None = None) -> dict:
     if not re.fullmatch(r"[0-9a-f]{64}", contract):
         raise ValueError("A semantic build-contract digest is required")
-    result = adapter().ci_identity(work)
+    result = dict(adapter().ci_identity(work))
     result["build_contract"] = contract
     result["worker_schema"] = 1
+    selected = checked_platform(work, platform_inputs)
+    if selected is not None:
+        result["worker_schema"] = 2
+        result["platform_inputs"] = selected
+        result["platform_recipe"] = {name: build.digest(STATIC/name) for name in
+                                     ("gn_platform.py", "platform_contract.py")}
     return result
 
 
-def ninja_state(work: Path) -> dict:
+def ninja_state(work: Path, platform_inputs: dict | None = None) -> dict:
     """Detect both newly added and rebuilt edges, including unchanged filenames."""
-    out = work / "download/chromium/src/out/CEF_Static_Release_x64"
+    selected = checked_platform(work, platform_inputs)
+    out = work / "download/chromium/src/out" / (
+        "CEF_Static_Platform_Release_x64" if selected else "CEF_Static_Release_x64")
     log = out / ".ninja_log"
     if not log.exists():
         return {}
@@ -80,20 +106,26 @@ def progress(before: dict, after: dict, complete: bool) -> dict:
             "engine_runtime_verified": False, "changed_output_sample": changed[:20]}
 
 
-def slice_build(work: Path, logs: Path, checkpoint: Path, state: Path, contract: str, seconds: int, jobs: int) -> None:
+def slice_build(work: Path, logs: Path, checkpoint: Path, state: Path, contract: str, seconds: int, jobs: int,
+                platform_inputs: dict | None = None) -> None:
     if not 1 <= seconds <= 10800 or not 1 <= jobs <= 1024:
         raise ValueError("Invalid slice/job budget")
     resume_checkpoint.new_run_only(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
     state.unlink(missing_ok=True)
-    ident = identity(work, contract)
+    selected = checked_platform(work, platform_inputs)
+    ident = identity(work, contract, selected)
     work.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
     if checkpoint.exists():
         raise ValueError("Refusing to overwrite a checkpoint package")
+    if selected is not None:
+        build.run(build.platform_command(work, selected) + ["--validate-inputs"],
+                  work, logs, "validate-platform-before-source", timeout=1200)
     build.setup_environment(work)
     source = build.prepare(work, logs)
-    out = build.configuration(source, logs)
-    before = ninja_state(work)
+    out = (build.configuration(source, logs) if selected is None else
+           build.configuration(source, logs, platform_inputs=selected))
+    before = ninja_state(work, selected)
     write_json(logs / "checkpoint-preflight.json", adapter().preflight(work))
     ninja = build.find_binary(source, ["third_party/ninja/ninja.exe"] if os.name == "nt" else ["third_party/ninja/ninja"])
     failure = None
@@ -110,7 +142,7 @@ def slice_build(work: Path, logs: Path, checkpoint: Path, state: Path, contract:
         failure = error
     saved = adapter().save(work, checkpoint, ident)
     complete = result["status"] == "complete"
-    report = progress(before, ninja_state(work), complete)
+    report = progress(before, ninja_state(work, selected), complete)
     write_json(logs / "progress.json", report)
     write_json(state, {"schema": 1, "kind": "engine-iteration", "status": result["status"],
                       "ready": complete, "checkpoint_ready": True, "engine_runtime_verified": False,
@@ -134,21 +166,32 @@ def main() -> None:
     parser.add_argument("--hide", type=Path, action="append", default=[])
     parser.add_argument("--seconds", type=int, default=9000)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--platform-manifest", type=Path)
+    parser.add_argument("--platform-prefix", type=Path)
+    parser.add_argument("--platform-sha256")
     args = parser.parse_args()
     work, logs = args.work.resolve(), args.logs.resolve()
+    selected = checked_platform(work, build.platform_selection(
+        args.platform_manifest, args.platform_prefix, args.platform_sha256))
+    if selected is not None and args.operation == "verify-consumer":
+        parser.error("The platform source contract is not a consumer runtime qualification")
     logs.mkdir(parents=True, exist_ok=True)
     if args.operation == "identity":
-        write_json(args.state, identity(work, args.contract))
+        write_json(args.state, identity(work, args.contract, selected))
     elif args.operation == "restore":
         if args.checkpoint is None:
             parser.error("--checkpoint is required")
-        restored = adapter().restore(args.checkpoint.resolve(), work, identity(work, args.contract))
+        args.state.unlink(missing_ok=True)
+        restored = adapter().restore(args.checkpoint.resolve(), work, identity(work, args.contract, selected))
+        if selected is not None:
+            build.run(build.platform_command(work, selected) + ["--validate-inputs"],
+                      work, logs, "validate-restored-platform", timeout=1200)
         write_json(args.state, {"schema": 1, "kind": "restored-checkpoint", "files": restored["files"],
                                "engine_runtime_verified": False})
     elif args.operation == "slice":
         if args.checkpoint is None:
             parser.error("--checkpoint is required")
-        slice_build(work, logs, args.checkpoint.resolve(), args.state, args.contract, args.seconds, args.jobs)
+        slice_build(work, logs, args.checkpoint.resolve(), args.state, args.contract, args.seconds, args.jobs, selected)
     else:
         if args.executable is None or not args.executable.is_file():
             parser.error("--executable is required")
