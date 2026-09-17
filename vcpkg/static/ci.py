@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import sdk_package
+import session_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = ROOT/'vcpkg/ports/cef-static'
@@ -120,7 +121,6 @@ def main() -> None:
                 'status': 'failed', 'transport_verified': False,
                 'error': type(error).__name__+': '+str(error)}))
             raise
-        print('STATIC_ENGINE_VCPKG_EXTERNAL_CAPI_CONSUMER_VERIFIED',flush=True)
     finally:
         port_logs = manager/'buildtrees/cef-static'
         if port_logs.is_dir():
@@ -129,6 +129,8 @@ def main() -> None:
                 if path.is_file() and (path.suffix in ('.log','.json') or path.name=='args.gn'):
                     dest = diagnostics/'port'/path.relative_to(port_logs)
                     dest.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(path,dest)
-    shutil.rmtree(session)  # Success only; belongs exclusively to this invocation.
+    # Success only: failed build/runtime/packaging keeps its session for diagnosis.
+    session_cleanup.remove_session(session, work, diagnostics)
+    print('STATIC_ENGINE_VCPKG_EXTERNAL_CAPI_CONSUMER_VERIFIED',flush=True)
 
 if __name__=='__main__': main()
