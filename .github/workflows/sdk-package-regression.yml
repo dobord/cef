@@ -67,6 +67,8 @@ jobs:
                   raise RuntimeError('Native baseline recipe does not match checkpoint producer')
               result['baseline'] = previous
           (folder/'identity.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
+      - name: Verify strict read-only SDK session cleanup before engine work
+        run: python -I -m unittest discover -s vcpkg/static/tests -p test_session_cleanup.py -v
       - name: Verify real 2-GiB boundary, ZIP64 integrity and native SDK relocation
         run: python -m unittest discover -s vcpkg/static/tests -p test_sdk_package.py -v
       - name: Preserve only small fixture evidence, never synthetic SDK packages

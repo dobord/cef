@@ -1,0 +1,65 @@
+name: Native SDK session cleanup (fixture only)
+on:
+  workflow_call:
+  push:
+    branches: [fix/sdk-readonly-cleanup]
+permissions:
+  contents: read
+jobs:
+  cleanup:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Measure the exact native recipe transition without restoring Chromium
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib, subprocess, sys
+          sys.path.insert(0, str(pathlib.Path('vcpkg/static').resolve()))
+          if os.name == 'nt':
+              import checkpoint as adapter
+          else:
+              import linux_checkpoint as adapter
+          work = pathlib.Path(os.environ['RUNNER_TEMP'])/'cef-static'
+          folder = pathlib.Path('static-diagnostics/session-cleanup-regression')
+          folder.mkdir(parents=True, exist_ok=True)
+          result = {'fixture_only': True, 'engine_runtime_verified': False,
+                    'candidate_commit': os.environ['GITHUB_SHA'],
+                    'candidate': adapter.ci_identity(work)}
+          path = pathlib.Path('vcpkg/static/ci.py')
+          candidate = path.read_bytes()
+          baseline_commit = 'c4e8c1e24f0483c42c5439bd95df293d05405a83'
+          subprocess.run(['git', 'fetch', '--depth=1', 'origin', baseline_commit], check=True, timeout=120)
+          baseline = subprocess.check_output(['git', 'show', baseline_commit+':'+path.as_posix()])
+          if b'\r\n' in candidate:
+              baseline = baseline.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')
+          try:
+              path.write_bytes(baseline)
+              result['baseline'] = adapter.ci_identity(work)
+          finally:
+              path.write_bytes(candidate)
+          expected = 'a95b60b7e9df0aa3885f26f602923ab320fd325d4c64521e8b2798c6574f7cc7' if os.name == 'nt' else '1552ebb1547552d8800169d456e585994bfab4a9de8acc0dfb82ec700c5ca047'
+          if result['baseline']['recipe'] != expected:
+              raise RuntimeError('Native baseline differs from reviewed checkpoint producer')
+          result['cleanup_sha256'] = hashlib.sha256(pathlib.Path('vcpkg/static/session_cleanup.py').read_bytes()).hexdigest()
+          (folder/'identity.json').write_text(json.dumps(result, indent=2)+'\n', encoding='utf-8')
+      - name: Reproduce read-only deletion and test strict scoped cleanup
+        run: python -I -m unittest discover -s vcpkg/static/tests -p test_session_cleanup.py -v
+      - name: Check existing port contracts
+        run: python -m unittest discover -s vcpkg/ports/cef-static/tests -v
+      - name: Check Python syntax
+        run: python -m compileall -q vcpkg/static
+      - name: Preserve small native filesystem evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sdk-cleanup-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: static-diagnostics/session-cleanup-regression/
+          if-no-files-found: error
+          retention-days: 7
