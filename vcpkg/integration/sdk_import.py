@@ -3,6 +3,8 @@
 
 Only the CEF-owned package subtree is installed. Old vcpkg status databases,
 triplets and toolchains are not transplanted. Downloaded Python is data only.
+Package-manager metadata is retained as upstream provenance, never reused as
+metadata for the new package ABI.
 """
 from __future__ import annotations
 import argparse
@@ -29,6 +31,8 @@ MAX_UNPACKED = 12 * 1024**3
 MAX_JSON = 32 * 1024**2
 REPOSITORY = "dobord/cef"
 RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", re.I)
+MANAGER_METADATA = frozenset({"vcpkg_abi_info.txt", "vcpkg.spdx.json"})
+PROVENANCE_DIRECTORY = PurePosixPath("share/cef-static/upstream-package-metadata")
 
 
 def require(value: bool, message: str) -> None:
@@ -133,9 +137,20 @@ def selected_member(name: str, package_name: str, source_triplet: str) -> PurePo
         ("include", "cef-static"), ("lib", "cef-static"), ("share", "cef-static")
     }:
         raise ValueError("Unexpected file in CEF package prefix: " + str(relative))
-    require(relative.suffix.lower() not in {".c", ".cc", ".cpp", ".cxx", ".pdb", ".o", ".obj", ".dll", ".so"},
+    lowered = tuple(p.casefold() for p in relative.parts)
+    require(lowered[:3] != PROVENANCE_DIRECTORY.parts,
+            "Upstream payload collides with reserved provenance directory")
+    # vcpkg writes these files after post-build validation. Installing the old
+    # ABI file causes copy_file(...): File exists, and reusing the old SPDX
+    # document would describe the wrong package. Preserve both under a distinct
+    # provenance path; all source bytes were checked by verify_bundle first.
+    if lowered[:2] == ("share", "cef-static") and len(lowered) == 3 and lowered[2] in MANAGER_METADATA:
+        require(relative.name == lowered[2], "Noncanonical package-manager metadata name")
+        return PROVENANCE_DIRECTORY / relative.name
+    require(relative.suffix.lower() not in {".c", ".cc", ".cpp", ".cxx", ".pdb", ".o", ".obj", ".dll", ".so", ".dylib"}
+            and re.search(r"\.so(?:\.|$)", relative.name, re.I) is None,
             "Implementation, debug or shared runtime file in SDK payload")
-    require(not any(p.casefold() in {".git", "downloads", "buildtrees"} for p in relative.parts),
+    require(not any(p in {".git", "downloads", "buildtrees"} for p in lowered),
             "Workspace data in CEF payload: " + str(relative))
     return relative
 
