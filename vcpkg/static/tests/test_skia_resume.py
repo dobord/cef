@@ -149,15 +149,72 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(recipe(m['platform']),m['to_recipe'])
 
     def test_only_exact_producer_recipe_sha_attempt_migrates(self):
+        # This unit test isolates producer/recipe selection from native host I/O.
+        # The image guard itself is exercised below with the committed baseline
+        # and by test_runner_image_migration; never accept a fake image in production.
         for m in LEDGER['migrations']:
             identity={'platform':m['platform'],'recipe':m['to_recipe'],'work':'unchanged','image':'unchanged','schema':3}
             run={'id':m['producer_run'],'head_sha':m['producer_sha'],'run_attempt':m['producer_attempt']}
-            adapted,selected=resume.checkpoint_input_identity(identity,run)
-            self.assertEqual(selected,m)
-            self.assertEqual(adapted,dict(identity,recipe=m['from_recipe']))
-            for field,value in [('id',1),('head_sha','0'*40),('run_attempt',2)]:
-                bad=dict(run,**{field:value}); self.assertEqual(resume.checkpoint_input_identity(identity,bad),(identity,None))
-            bad=dict(identity,recipe='f'*64); self.assertEqual(resume.checkpoint_input_identity(bad,run),(bad,None))
+            expected=dict(identity,recipe=m['from_recipe'])
+            with patch('runner_image_migration.input_identity',
+                       side_effect=lambda value, *unused: value) as image_check:
+                adapted,selected=resume.checkpoint_input_identity(identity,run)
+                self.assertEqual(selected,m)
+                self.assertEqual(adapted,expected)
+                if 'image_transition' in m:
+                    image_check.assert_called_once_with(expected,m['image_transition'],
+                        ROOT/'static-diagnostics/resume/runner-image-transition.json')
+                else:
+                    image_check.assert_not_called()
+                image_check.reset_mock()
+                for field,value in [('id',1),('head_sha','0'*40),('run_attempt',2)]:
+                    bad=dict(run,**{field:value}); self.assertEqual(resume.checkpoint_input_identity(identity,bad),(identity,None))
+                bad=dict(identity,recipe='f'*64); self.assertEqual(resume.checkpoint_input_identity(bad,run),(bad,None))
+                image_check.assert_not_called()
+
+    def test_committed_image_transition_requires_recorded_build_content(self):
+        import runner_fingerprint as fp
+        import runner_image_migration as images
+        for m in LEDGER['migrations']:
+            if 'image_transition' not in m:
+                continue
+            transition=m['image_transition']
+            baseline=json.loads((ROOT/'vcpkg/static/runner-image-baseline.json').read_text())
+            self.assertEqual(baseline['image'],transition['from_image'])
+            self.assertEqual(int(baseline['run_id']),transition['evidence_run'])
+            self.assertEqual(baseline['sha'],transition['evidence_sha'])
+            self.assertEqual(images.checked_digest(baseline['toolchain']),transition['toolchain_sha256'])
+            self.assertEqual(hashlib.sha256(Path(fp.__file__).read_text(
+                encoding='utf-8').encode('utf-8')).hexdigest(),transition['collector_sha256'])
+            run={'id':m['producer_run'],'head_sha':m['producer_sha'],'run_attempt':m['producer_attempt']}
+            # Mock only the expensive host file reads, not the image validator.
+            # This test does not certify the real new-image host or CEF runtime.
+            with tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);ledger=root/'vcpkg/static/checkpoint-migrations.json'
+                ledger.parent.mkdir(parents=True);ledger.write_text(json.dumps(LEDGER))
+                with patch.object(resume,'ROOT',root),patch.object(fp,'collect',
+                        return_value=baseline['toolchain']) as collect:
+                    for image in (transition['from_image'],transition['to_image']):
+                        identity={'platform':m['platform'],'recipe':m['to_recipe'],
+                                  'work':'unchanged','image':image,'schema':3}
+                        before=dict(identity)
+                        adapted,selected=resume.checkpoint_input_identity(identity,run)
+                        self.assertEqual(selected,m)
+                        self.assertEqual(identity,before)
+                        self.assertEqual(adapted,dict(identity,recipe=m['from_recipe'],
+                                                      image=transition['from_image']))
+                    self.assertEqual(collect.call_count,2)
+                    collect.reset_mock()
+                    with self.assertRaisesRegex(ValueError,'Unreviewed runner image'):
+                        resume.checkpoint_input_identity(dict(identity,image='unchanged'),run)
+                    collect.assert_not_called()
+                    changed=copy.deepcopy(baseline['toolchain'])
+                    component=next(iter(changed['components']))
+                    changed['components'][component]['sha256']='0'*64
+                    changed['sha256']=hashlib.sha256(fp.json_bytes(changed['components'])).hexdigest()
+                    collect.return_value=changed
+                    with self.assertRaisesRegex(ValueError,'Host build inputs differ'):
+                        resume.checkpoint_input_identity(identity,run)
 
     def test_source_recipe_pairs_match_current_patch_and_smoke(self):
         a=(ROOT/'vcpkg/ports/cef-static/patch_source.py').read_bytes().replace(b'\r\n',b'\n')
