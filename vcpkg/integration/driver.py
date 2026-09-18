@@ -98,6 +98,16 @@ def ninja_state(work: Path, platform_inputs: dict | None = None) -> dict:
     return result
 
 
+def strict_linux_dependencies(imports: str) -> list[str]:
+    allowed = {"libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0",
+               "librt.so.1", "libresolv.so.2", "ld-linux-x86-64.so.2"}
+    needed = re.findall(r"Shared library: \[([^\]]+)\]", imports)
+    unexpected = sorted(set(needed) - allowed)
+    if unexpected:
+        raise ValueError("Strict CEF consumer has dynamic third-party dependencies: " + ", ".join(unexpected))
+    return needed
+
+
 def progress(before: dict, after: dict, complete: bool) -> dict:
     changed = sorted(name for name, value in after.items() if before.get(name) != value)
     return {"status": "progress" if changed or complete else "stalled", "changed_outputs": len(changed),
@@ -202,14 +212,20 @@ def main() -> None:
         else:
             imports = build.run(["readelf", "-d", executable], logs, logs, "consumer-imports")
             build.verify_binary_imports(imports, False)
+            if os.environ.get("CEF_STATIC_STRICT_THIRD_PARTY") == "1":
+                strict_linux_dependencies(imports)
         hidden = [p.resolve() for p in args.hide]
         if any(executable.is_relative_to(p) or logs.is_relative_to(p) for p in hidden):
             raise ValueError("Runtime evidence and deployed executable must remain outside hidden trees")
         with build.hidden_directories(hidden):
             proof = build.execute_smoke(executable, logs)
+        strict = os.environ.get("CEF_STATIC_STRICT_THIRD_PARTY") == "1"
+        if strict and proof.get("third_party_modules_static") is not True:
+            raise ValueError("Strict CEF runtime module audit was not satisfied")
         write_json(args.state, {"schema": 1, "kind": "consumer-verification", "engine_linkage": "static",
                                "capi_only": True, "executable_sha256": build.digest(executable), "smoke": proof,
                                "smoke_runs": json.loads((logs / "smoke-runs.json").read_text()),
+                               "third_party_libraries_static": strict,
                                "system_libraries_static": False, "sandbox_verified": False})
 
 
