@@ -64,6 +64,19 @@ class SourcePlatformTests(unittest.TestCase):
         self.configure(self.selection)
         self.assertEqual(clock,(out/'args.gn').stat().st_mtime_ns)
 
+    def test_windows_target_uses_platform_msvc_stl_without_changing_host_tools(self):
+        merged = {'use_custom_libcxx': True, 'use_custom_libcxx_for_host': True}
+        value = build.static_profile(merged, True)
+        self.assertIs(value['use_custom_libcxx'], False)
+        self.assertIs(value['use_custom_libcxx_for_host'], True)
+        self.assertIs(value['dawn_use_built_dxc'], False)
+        self.assertIs(value['dawn_force_system_component_load'], True)
+        self.assertIs(value['dawn_use_agility_sdk'], False)
+        # Linux keeps the platform profile's stdlib decision unchanged.
+        linux = build.static_profile(merged, False)
+        self.assertIs(linux['use_custom_libcxx'], True)
+        self.assertIs(linux['use_custom_libcxx_for_host'], True)
+
     def test_default_engine_profile_and_directory_remain_unchanged(self):
         out=self.configure()
         self.assertEqual(out.name,'CEF_Static_Release_x64')

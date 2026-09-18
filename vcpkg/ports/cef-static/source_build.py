@@ -370,9 +370,15 @@ def static_profile(merged: dict, windows: bool) -> dict:
     """
     result = dict(merged)
     if windows:
+        # The exported static engine is linked into ordinary native vcpkg C++
+        # consumers. Use the platform MSVC STL for target objects so Chromium's
+        # in-tree libc++ source_set is not embedded into the same executable.
+        # Host build tools keep the pinned Chromium libc++ implementation.
         result.update(dawn_use_built_dxc=False,
                       dawn_force_system_component_load=True,
-                      dawn_use_agility_sdk=False)
+                      dawn_use_agility_sdk=False,
+                      use_custom_libcxx=False,
+                      use_custom_libcxx_for_host=True)
     else:
         result.pop('enable_linux_installer', None)
     return result
