@@ -44,6 +44,13 @@ class DriverTests(unittest.TestCase):
             os.utime(obj, ns=(1000000000, 2000000000))
             self.assertNotEqual(before, driver.ninja_state(work))
 
+    def test_strict_linux_dependency_audit(self):
+        good = " 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n" \
+               " 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n"
+        self.assertEqual(driver.strict_linux_dependencies(good), ["libc.so.6", "libm.so.6"])
+        with self.assertRaises(ValueError):
+            driver.strict_linux_dependencies(good + " Shared library: [libX11.so.6]\n")
+
     def test_atomic_json(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "sub/state.json"
