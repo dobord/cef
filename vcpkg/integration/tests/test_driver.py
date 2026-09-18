@@ -51,6 +51,13 @@ class DriverTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             driver.strict_linux_dependencies(good + " Shared library: [libX11.so.6]\n")
 
+    def test_strict_installer_never_rebrands_release_import(self):
+        text = (ROOT / "vcpkg/integration/install.cmake").read_text()
+        self.assertIn('cef-static[strict-platform]', text)
+        self.assertIn('The published engine-only SDK cannot be rebranded as static-third-party', text)
+        self.assertIn('CEF_STATIC_PLATFORM_MANIFEST', text)
+        self.assertIn('CEF_Static_Platform_Release_x64', text)
+
     def test_atomic_json(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "sub/state.json"
