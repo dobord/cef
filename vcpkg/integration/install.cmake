@@ -102,6 +102,46 @@ elseif(_mode STREQUAL "source")
 else()
     message(FATAL_ERROR "Unsupported CEF acquisition mode; no implicit fallback")
 endif()
+
+# High-level CEF client headers use a small client-side logging implementation.
+# Build it with the vcpkg consumer toolchain instead of importing Chromium's
+# C++ runtime. CEF::static remains the C-API engine target; CEF::cpp opts into
+# this companion archive and preserves the static engine boundary.
+vcpkg_cmake_configure(
+    SOURCE_PATH "${CEF_RECIPE_SOURCE}/vcpkg/ports/cef-static/cpp_support"
+    OPTIONS
+        "-DCEF_RECIPE_SOURCE=${CEF_RECIPE_SOURCE}"
+        "-DCEF_PACKAGE_PREFIX=${CURRENT_PACKAGES_DIR}"
+)
+vcpkg_cmake_install()
+if(VCPKG_TARGET_IS_WINDOWS)
+    set(_cef_cpp_archive "cef_cpp_support.lib")
+else()
+    set(_cef_cpp_archive "libcef_cpp_support.a")
+endif()
+if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/cef-static/${_cef_cpp_archive}")
+    message(FATAL_ERROR "CEF C++ client support archive was not installed")
+endif()
+set(_cef_config "${CURRENT_PACKAGES_DIR}/share/cef-static/cef-static-config.cmake")
+if(NOT EXISTS "${_cef_config}")
+    message(FATAL_ERROR "CEF static CMake config is missing")
+endif()
+file(APPEND "${_cef_config}" "
+# vcpkg-built C++ client support. The engine target itself remains CAPI-only.
+if(NOT TARGET CEF::cpp-support)
+  add_library(CEF::cpp-support STATIC IMPORTED)
+  get_filename_component(_cef_cpp_prefix \"\${CMAKE_CURRENT_LIST_DIR}/../..\" ABSOLUTE)
+  set_target_properties(CEF::cpp-support PROPERTIES
+    IMPORTED_LOCATION \"\${_cef_cpp_prefix}/lib/cef-static/${_cef_cpp_archive}\")
+endif()
+if(NOT TARGET CEF::cpp)
+  add_library(CEF::cpp INTERFACE IMPORTED)
+  set_property(TARGET CEF::cpp PROPERTY INTERFACE_LINK_LIBRARIES
+    \"CEF::cpp-support;CEF::static\")
+endif()
+set(CEF_STATIC_CPP_API TRUE)
+")
+
 file(COPY_FILE "${CEF_BUILD_CONTRACT_FILE}"
     "${CURRENT_PACKAGES_DIR}/share/cef-static/build-contract.json")
 file(INSTALL "${CURRENT_PORT_DIR}/usage" DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")

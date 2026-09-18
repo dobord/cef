@@ -59,6 +59,14 @@ class DriverTests(unittest.TestCase):
         self.assertIn('--required-profile "${_profile}"', text)
         self.assertIn('CEF_STATIC_PLATFORM_MANIFEST', text)
         self.assertIn('CEF_Static_Platform_Release_x64', text)
+        self.assertIn('vcpkg_cmake_configure(', text)
+        self.assertIn('cpp_support', text)
+        self.assertIn('CEF::cpp-support', text)
+        self.assertIn('CEF::cpp', text)
+        support = (ROOT / 'vcpkg/ports/cef-static/cpp_support/CMakeLists.txt').read_text()
+        self.assertIn('libcef_dll/base/cef_logging.cc', support)
+        self.assertIn('MSVC_RUNTIME_LIBRARY MultiThreaded', support)
+        self.assertNotIn('libcef_dll_wrapper', support)
 
     def test_atomic_json(self):
         with tempfile.TemporaryDirectory() as d:
