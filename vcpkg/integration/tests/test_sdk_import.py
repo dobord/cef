@@ -69,12 +69,45 @@ class ImportTests(unittest.TestCase):
         mod.install_bundle(lock, self.triplet, directory, self.destination)
         self.assertTrue((self.destination / "share/cef-static/acquisition.json").is_file())
 
-    def test_strict_profile_is_not_fabricated(self):
+    def test_linux_strict_profile_is_not_fabricated(self):
         lock, directory = self.bundle()
         for profile in ("static-third-party", "fully-static", "unexpected"):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
-                mod.install_bundle(lock, self.triplet, directory, self.destination, required_profile=profile)
+                mod.install_bundle(
+                    lock, self.triplet, directory, self.destination,
+                    required_profile=profile)
         self.assertFalse(self.destination.exists())
+
+    def test_windows_release_bytes_require_new_strict_requalification(self):
+        old = self.prefix
+        self.triplet = "x64-windows-static-release"
+        self.prefix = self.source / "installed/x64-windows-static"
+        old.rename(self.prefix)
+        self.receipt = fixtures.synthetic_receipt("x64-windows-static")
+        (self.source / "static-sdk-receipt.json").write_bytes(
+            mod.sdk.json_bytes(self.receipt))
+        lock, directory = self.bundle()
+        result = mod.install_bundle(
+            lock, self.triplet, directory, self.destination,
+            required_profile="static-third-party")
+        self.assertEqual(result["requested_profile"], "static-third-party")
+        self.assertTrue(result["strict_requalification_required"])
+        self.assertTrue(result["consumer_requalification_required"])
+        self.assertNotIn("third_party_libraries_static", result)
+
+    def test_windows_release_bytes_still_cannot_claim_fully_static(self):
+        old = self.prefix
+        self.triplet = "x64-windows-static-release"
+        self.prefix = self.source / "installed/x64-windows-static"
+        old.rename(self.prefix)
+        self.receipt = fixtures.synthetic_receipt("x64-windows-static")
+        (self.source / "static-sdk-receipt.json").write_bytes(
+            mod.sdk.json_bytes(self.receipt))
+        lock, directory = self.bundle()
+        with self.assertRaises(ValueError):
+            mod.install_bundle(
+                lock, self.triplet, directory, self.destination,
+                required_profile="fully-static")
 
     def test_source_receipt_is_preserved(self):
         lock, directory = self.bundle()
