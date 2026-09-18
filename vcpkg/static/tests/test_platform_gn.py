@@ -21,7 +21,8 @@ template("pkg_config") {
 '''
         result=gn.patch_template(source)
         self.assertIn('current_toolchain == default_toolchain',result)
-        self.assertIn('assert(use_lld',result)
+        self.assertNotIn('assert(use_lld',result)
+        self.assertIs(gn.gn_args(Path('/manifest'), Path('/prefix'), 'a'*64)['use_lld'], True)
         self.assertIn('_enable_cache = false',result)
         self.assertIn('ldflags = pkgresult[4]',result)
         self.assertIn('[ "inputs" ] + _cef_identity_args',result)
