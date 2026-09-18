@@ -79,6 +79,34 @@ def patch_dawn_ozone_dependencies(root: Path) -> None:
 ''')
 
 
+def patch_windows_msvc_stl_warnings(root: Path) -> None:
+    # Chromium's PartitionAlloc enables -Wctad-maybe-unsupported for all clang
+    # builds. With the reviewed Windows platform STL this warns on valid
+    # std::lock_guard CTAD and /WX turns it into an error. Keep the warning on
+    # every non-Windows target and preserve the rest of Chromium's warning set.
+    file = 'base/allocator/partition_allocator/src/partition_alloc/BUILD.gn'
+    replace(root, file,
+            '''      "-Wcstring-format-directive",
+      "-Wctad-maybe-unsupported",
+      "-Wdeprecated-copy",
+''',
+            '''      "-Wcstring-format-directive",
+      "-Wdeprecated-copy",
+''')
+    replace(root, file,
+            '''      "-Wunused-but-set-variable",
+      "-Wunused-macros",
+    ]
+''',
+            '''      "-Wunused-but-set-variable",
+      "-Wunused-macros",
+    ]
+    if (!is_win) {
+      cflags += [ "-Wctad-maybe-unsupported" ]
+    }
+''')
+
+
 def patch_gpu_init_filter_set(root: Path) -> None:
     # filter_set is read by either Vulkan or the ChromeOS Dawn filter. A
     # Vulkan-disabled non-ChromeOS Ozone build has neither reader. Keep both
@@ -120,6 +148,7 @@ def patch_skia_x11_fallback(root: Path) -> None:
 def patch(root: Path) -> None:
     patch_vulkan_disabled(root)
     patch_dawn_ozone_dependencies(root)
+    patch_windows_msvc_stl_warnings(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)
     replace(root, 'cef/libcef/features/features.gni', '  enable_cef = true\n',
