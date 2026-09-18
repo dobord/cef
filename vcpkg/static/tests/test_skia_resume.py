@@ -261,18 +261,25 @@ class MigrationTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,'Host build inputs differ'):
                         resume.checkpoint_input_identity(identity,run)
 
-    def test_source_recipe_pairs_match_current_patch_and_smoke(self):
+    def test_source_recipe_pairs_are_only_reviewed_x11_migrations(self):
+        # These are receipts for the X11-only source migration, not aliases for
+        # every later recipe revision. Unrelated source edits must keep forcing
+        # a fresh workspace instead of silently reusing compiled objects.
+        self.assertEqual(build.X11_RECIPE_UPGRADES, {
+            '4c71c50aa1ef6da3edfa14b65509deb9baaa50f96c884f41d4710ebb8191705e':
+                '41340bd6fcdf6d7a58ba7103b3c1c44df0f94dd7f48efb34ea1debd66b53e07b',
+            'e1102bb26d5b0247c07f698aa937e344fdf5be7d5c8c7093de5ee2df14f874c6':
+                'e07ed95e4f00f5432292bd4652704b9ecf7335edeb07486fd8ad60a4d1691da7',
+        })
         a=(ROOT/'vcpkg/ports/cef-static/patch_source.py').read_bytes().replace(b'\r\n',b'\n')
         b=(ROOT/'vcpkg/ports/cef-static/smoke.c').read_bytes().replace(b'\r\n',b'\n')
-        values={hashlib.sha256(a+b).hexdigest(),hashlib.sha256(a.replace(b'\n',b'\r\n')+b.replace(b'\n',b'\r\n')).hexdigest()}
-        self.assertEqual(set(build.X11_RECIPE_UPGRADES.values()),values)
+        current={hashlib.sha256(a+b).hexdigest(),
+                 hashlib.sha256(a.replace(b'\n',b'\r\n')+b.replace(b'\n',b'\r\n')).hexdigest()}
+        self.assertTrue(set(build.X11_RECIPE_UPGRADES.values()).isdisjoint(current))
 
     @unittest.skipUnless(PINNED, 'full pinned Chromium file supplied by CI')
     def test_real_source_recipe_migration_keeps_other_objects(self):
-        a=(ROOT/'vcpkg/ports/cef-static/patch_source.py').read_bytes()
-        b=(ROOT/'vcpkg/ports/cef-static/smoke.c').read_bytes()
-        target=hashlib.sha256(a+b).hexdigest()
-        previous=next(k for k,v in build.X11_RECIPE_UPGRADES.items() if v==target)
+        previous,target=next(iter(build.X11_RECIPE_UPGRADES.items()))
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);source=root/'src';logs=root/'logs';logs.mkdir()
             p=source/patches.X11_FILE;p.parent.mkdir(parents=True);p.write_bytes(Path(PINNED).read_bytes())

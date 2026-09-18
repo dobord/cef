@@ -99,6 +99,8 @@ def main():
   use_lld = true
   use_sysroot = false
   use_remoteexec = false
+  use_vaapi = false
+  use_v4l2_codec = false
 }
 current_cpu = target_cpu
 is_linux = true
