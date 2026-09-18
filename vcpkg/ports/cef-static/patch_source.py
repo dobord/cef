@@ -133,6 +133,33 @@ def patch_windows_msvc_stl_warnings(root: Path) -> None:
 ''')
 
 
+    # WebRTC has its own late-applied common_config and independently enables
+    # -Wctad-maybe-unsupported. With the native Windows STL this warns on valid
+    # std::less_equal{} CTAD in Chromium headers. Override only that diagnostic
+    # in the same WebRTC config so the flag ordering is deterministic.
+    webrtc = 'third_party/webrtc/BUILD.gn'
+    replace(root, webrtc,
+            '''  if (is_clang) {
+    cflags += [
+      "-Wshadow",
+
+      # See https://reviews.llvm.org/D56731 for details about this
+      # warning.
+      "-Wctad-maybe-unsupported",
+    ]
+  }
+''',
+            '''  if (is_clang) {
+    cflags += [ "-Wshadow" ]
+    if (is_win) {
+      cflags += [ "-Wno-ctad-maybe-unsupported" ]
+    } else {
+      cflags += [ "-Wctad-maybe-unsupported" ]
+    }
+  }
+''')
+
+
 def patch_gpu_init_filter_set(root: Path) -> None:
     # filter_set is read by either Vulkan or the ChromeOS Dawn filter. A
     # Vulkan-disabled non-ChromeOS Ozone build has neither reader. Keep both
