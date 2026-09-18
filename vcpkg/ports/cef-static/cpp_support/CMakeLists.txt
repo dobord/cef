@@ -1,18 +1,23 @@
 cmake_minimum_required(VERSION 3.24)
 project(cef_static_cpp_support LANGUAGES CXX)
 
-if(NOT DEFINED CEF_RECIPE_SOURCE OR NOT IS_DIRECTORY "${CEF_RECIPE_SOURCE}")
+if(NOT DEFINED CEF_RECIPE_SOURCE OR NOT DEFINED CEF_PACKAGE_PREFIX)
+  message(FATAL_ERROR "CEF recipe and package prefix are required")
+endif()
+cmake_path(CONVERT "${CEF_RECIPE_SOURCE}" TO_CMAKE_PATH_LIST _cef_recipe_source NORMALIZE)
+cmake_path(CONVERT "${CEF_PACKAGE_PREFIX}" TO_CMAKE_PATH_LIST _cef_package_prefix NORMALIZE)
+if(NOT IS_DIRECTORY "${_cef_recipe_source}")
   message(FATAL_ERROR "CEF_RECIPE_SOURCE must name the pinned CEF recipe")
 endif()
-if(NOT DEFINED CEF_PACKAGE_PREFIX OR NOT IS_DIRECTORY "${CEF_PACKAGE_PREFIX}/include/cef-static")
+if(NOT IS_DIRECTORY "${_cef_package_prefix}/include/cef-static")
   message(FATAL_ERROR "CEF_PACKAGE_PREFIX must contain the exported cef-static headers")
 endif()
 
 add_library(cef_cpp_support STATIC
-  "${CEF_RECIPE_SOURCE}/libcef_dll/base/cef_logging.cc"
+  "${_cef_recipe_source}/libcef_dll/base/cef_logging.cc"
 )
 target_include_directories(cef_cpp_support PRIVATE
-  "${CEF_PACKAGE_PREFIX}/include/cef-static"
+  "${_cef_package_prefix}/include/cef-static"
 )
 target_compile_definitions(cef_cpp_support PRIVATE
   CEF_STATIC
