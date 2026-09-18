@@ -2,10 +2,10 @@ name: Pinned CEF release import native verification
 on:
   push:
     branches: [feature/vcpkg-static-integration]
-    paths: ['vcpkg/integration/**', '.github/workflows/import-native.yml']
+    paths: ['vcpkg/integration/**', 'vcpkg/ports/cef-static/cpp_support/**', '.github/workflows/import-native.yml']
   pull_request:
     branches: [static-engine]
-    paths: ['vcpkg/integration/**', '.github/workflows/import-native.yml']
+    paths: ['vcpkg/integration/**', 'vcpkg/ports/cef-static/cpp_support/**', '.github/workflows/import-native.yml']
 permissions:
   contents: read
 jobs:
