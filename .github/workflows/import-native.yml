@@ -18,8 +18,6 @@ jobs:
             profile: engine-static
           - os: windows-2022
             profile: engine-static
-          - os: windows-2022
-            profile: static-third-party
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
