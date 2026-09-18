@@ -23,18 +23,22 @@ jobs:
           path = pathlib.Path("vcpkg/ports/cef-static/tests/fixtures/native-link-windows.txt.gz")
           text = gzip.decompress(path.read_bytes()).decode("utf-8", errors="strict")
           candidates = []
+          source = pathlib.Path("/src")
+          out = source / "out/CEF_Static_Release_x64"
           for raw in text.splitlines():
               value = raw.strip().removeprefix("| ").strip()
               if not value or value.startswith("||"):
                   continue
-              # Exporter hashes source-relative paths after resolving out/ inputs.
-              # The historical fixture stores Ninja link-edge input spelling.
-              variants = {value}
               if value.startswith("//"):
-                  variants.add(value[2:])
-              for item in variants:
-                  if hashlib.sha256(item.replace("\\","/").encode()).hexdigest().startswith(target):
-                      candidates.append((value,item))
+                  resolved = source / value[2:]
+              else:
+                  resolved = out / value
+              try:
+                  relative = resolved.resolve().relative_to(source).as_posix()
+              except ValueError:
+                  continue
+              if hashlib.sha256(relative.encode()).hexdigest().startswith(target):
+                  candidates.append((value,relative))
           print("ARCHIVE_HASH_MATCHES=" + repr(candidates))
           if not candidates:
               # Also emit basename/index-near candidates for diagnosis without
