@@ -12,14 +12,18 @@ import sdk_import
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def run(argv: list[str | Path], cwd: Path) -> None:
-    subprocess.run([str(p) for p in argv], cwd=cwd, check=True, timeout=1800)
+def run(argv: list[str | Path], cwd: Path, *, env: dict | None = None) -> None:
+    subprocess.run([str(p) for p in argv], cwd=cwd, env=env,
+                   check=True, timeout=1800)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--required-profile",
+                        choices=("engine-static", "static-third-party"),
+                        default="engine-static")
     args = parser.parse_args()
     work, evidence = args.work.resolve(), args.evidence.resolve()
     if work.exists() or evidence.is_relative_to(work):
@@ -31,7 +35,10 @@ def main() -> None:
     lock = sdk_import.read_json(ROOT / "vcpkg/integration/release.lock.json")
     transport = sdk_import.obtain(lock, triplet, work / "download")
     prefix = work / "imported-sdk"
-    acquisition = sdk_import.install_bundle(lock, triplet, transport, prefix)
+    if args.required_profile == "static-third-party" and not windows:
+        raise ValueError("Strict release requalification is Windows-only")
+    acquisition = sdk_import.install_bundle(
+        lock, triplet, transport, prefix, required_profile=args.required_profile)
     (evidence / "acquisition.json").write_bytes(sdk_import.sdk.json_bytes(acquisition))
     shutil.copyfile(prefix / "share/cef-static/static-link-inventory.json", evidence / "upstream-link-inventory.json")
     shutil.rmtree(work / "download")
@@ -54,13 +61,22 @@ def main() -> None:
             shutil.copy2(binary_dir / resource, deployed / resource)
     if (binary_dir / "locales").is_dir():
         shutil.copytree(binary_dir / "locales", deployed / "locales")
+    runtime_env = os.environ.copy()
+    if args.required_profile == "static-third-party":
+        runtime_env["CEF_STATIC_STRICT_THIRD_PARTY"] = "1"
     run([sys.executable, ROOT / "vcpkg/integration/driver.py", "verify-consumer",
          "--work", work / "no-chromium-workspace", "--logs", evidence,
          "--contract", acquisition["manifest_sha256"], "--state", evidence / "consumer.json",
-         "--executable", deployed / name, "--hide", prefix, "--hide", build], work)
+         "--executable", deployed / name, "--hide", prefix, "--hide", build],
+        work, env=runtime_env)
     proof = sdk_import.read_json(evidence / "consumer.json")
     if proof.get("kind") != "consumer-verification" or proof.get("engine_linkage") != "static":
         raise ValueError("Native release-import verification did not complete")
+    if args.required_profile == "static-third-party":
+        if (acquisition.get("strict_requalification_required") is not True
+                or proof.get("third_party_libraries_static") is not True
+                or proof.get("smoke", {}).get("third_party_modules_static") is not True):
+            raise ValueError("Strict Windows release reuse was not independently requalified")
     print("LOCKED_CEF_IMPORT_NATIVE_CONSUMER_VERIFIED", flush=True)
 
 
