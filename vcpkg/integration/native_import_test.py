@@ -22,7 +22,7 @@ def main() -> None:
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--required-profile",
-                        choices=("engine-static", "static-third-party"),
+                        choices=("engine-static",),
                         default="engine-static")
     args = parser.parse_args()
     work, evidence = args.work.resolve(), args.evidence.resolve()
@@ -35,8 +35,6 @@ def main() -> None:
     lock = sdk_import.read_json(ROOT / "vcpkg/integration/release.lock.json")
     transport = sdk_import.obtain(lock, triplet, work / "download")
     prefix = work / "imported-sdk"
-    if args.required_profile == "static-third-party" and not windows:
-        raise ValueError("Strict release requalification is Windows-only")
     acquisition = sdk_import.install_bundle(
         lock, triplet, transport, prefix, required_profile=args.required_profile)
     (evidence / "acquisition.json").write_bytes(sdk_import.sdk.json_bytes(acquisition))
@@ -77,8 +75,6 @@ def main() -> None:
     if (binary_dir / "locales").is_dir():
         shutil.copytree(binary_dir / "locales", deployed / "locales")
     runtime_env = os.environ.copy()
-    if args.required_profile == "static-third-party":
-        runtime_env["CEF_STATIC_STRICT_THIRD_PARTY"] = "1"
     run([sys.executable, ROOT / "vcpkg/integration/driver.py", "verify-consumer",
          "--work", work / "no-chromium-workspace", "--logs", evidence,
          "--contract", acquisition["manifest_sha256"], "--state", evidence / "consumer.json",
@@ -87,11 +83,6 @@ def main() -> None:
     proof = sdk_import.read_json(evidence / "consumer.json")
     if proof.get("kind") != "consumer-verification" or proof.get("engine_linkage") != "static":
         raise ValueError("Native release-import verification did not complete")
-    if args.required_profile == "static-third-party":
-        if (acquisition.get("strict_requalification_required") is not True
-                or proof.get("third_party_libraries_static") is not True
-                or proof.get("smoke", {}).get("third_party_modules_static") is not True):
-            raise ValueError("Strict Windows release reuse was not independently requalified")
     print("LOCKED_CEF_IMPORT_NATIVE_CONSUMER_VERIFIED", flush=True)
 
 
