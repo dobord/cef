@@ -15,6 +15,7 @@ from typing import Callable
 VERSION = '152.0.6+g708dc14+chromium-152.0.7977.83'
 TIMEOUT_SECONDS = 120
 WINDOWS_RUNS = 3
+WINDOWS_SNAPSHOT_TIMEOUT_SECONDS = 30
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -59,7 +60,8 @@ $report = @($rows | Where-Object { $ids -contains $_.ProcessId } | ForEach-Objec
 @{ root_pid = $rootId; processes = $report; diagnostic_only = $true } | ConvertTo-Json -Depth 6 -Compress
 '''.replace('ROOT_PID', str(pid))
         result = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-Command', script],
-                                capture_output=True, text=True, timeout=12, check=True)
+                                capture_output=True, text=True,
+                                timeout=WINDOWS_SNAPSHOT_TIMEOUT_SECONDS, check=True)
         report = json.loads(result.stdout.lstrip('\ufeff'))
     else:
         ids, report = [pid], {'root_pid': pid, 'processes': [], 'diagnostic_only': True}
