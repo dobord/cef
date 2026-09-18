@@ -46,6 +46,7 @@ template("pkg_config") {
         self.assertIn('gbm',gn.MODULES)
         self.assertIn('xshmfence',gn.MODULES)
         self.assertIn('cups',gn.MODULES)
+        self.assertIn('gtk+-3.0',gn.MODULES)
 
     def test_graph_rejects_system_search_and_uncaptured_archives(self):
         with tempfile.TemporaryDirectory() as directory:

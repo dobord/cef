@@ -31,7 +31,7 @@ MODULES = (
     'x11', 'xcomposite', 'xdamage', 'xext', 'xfixes', 'xrandr', 'xrender',
     'xtst', 'xi', 'xcb', 'xkbcommon', 'gbm', 'libdrm', 'expat', 'uuid',
     'libpci', 'libudev', 'cairo', 'harfbuzz', 'pango', 'pangocairo',
-    'alsa', 'zlib', 'xshmfence',
+    'gtk+-3.0', 'alsa', 'zlib', 'xshmfence',
 )
 
 
