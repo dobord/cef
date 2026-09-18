@@ -69,6 +69,7 @@ class SourcePlatformTests(unittest.TestCase):
         value = build.static_profile(merged, True)
         self.assertIs(value['use_custom_libcxx'], False)
         self.assertIs(value['use_custom_libcxx_for_host'], True)
+        self.assertIs(value['v8_enable_sandbox'], False)
         self.assertIs(value['dawn_use_built_dxc'], False)
         self.assertIs(value['dawn_force_system_component_load'], True)
         self.assertIs(value['dawn_use_agility_sdk'], False)
@@ -76,6 +77,7 @@ class SourcePlatformTests(unittest.TestCase):
         linux = build.static_profile(merged, False)
         self.assertIs(linux['use_custom_libcxx'], True)
         self.assertIs(linux['use_custom_libcxx_for_host'], True)
+        self.assertNotIn('v8_enable_sandbox', linux)
 
     def test_default_engine_profile_and_directory_remain_unchanged(self):
         out=self.configure()

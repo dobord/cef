@@ -378,7 +378,14 @@ def static_profile(merged: dict, windows: bool) -> dict:
                       dawn_force_system_component_load=True,
                       dawn_use_agility_sdk=False,
                       use_custom_libcxx=False,
-                      use_custom_libcxx_for_host=True)
+                      use_custom_libcxx_for_host=True,
+                      # Chromium 152 computes use_safe_libcxx from its in-tree
+                      # libc++; V8 sandbox hard-fails without that hardening.
+                      # Native MSVC STL is required for ABI-safe vcpkg C++
+                      # consumers, so this Windows-only static embedding profile
+                      # disables the V8 sandbox explicitly instead of bypassing
+                      # its hardening assertion.
+                      v8_enable_sandbox=False)
     else:
         result.pop('enable_linux_installer', None)
     return result
