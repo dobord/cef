@@ -32,8 +32,18 @@ string(JSON _triplet GET "${_contract}" triplet)
 if(NOT _schema EQUAL 1 OR NOT _triplet STREQUAL TARGET_TRIPLET)
     message(FATAL_ERROR "CEF build contract does not match the target triplet")
 endif()
-if(NOT _profile STREQUAL "engine-static")
-    message(FATAL_ERROR "This recipe has not qualified the complete static-third-party runtime closure. No downgrade is permitted.")
+if(NOT _profile STREQUAL "engine-static" AND NOT _profile STREQUAL "static-third-party")
+    message(FATAL_ERROR "Unsupported CEF linkage profile")
+endif()
+if(_profile STREQUAL "static-third-party")
+    if(NOT "strict-platform" IN_LIST FEATURES)
+        message(FATAL_ERROR "static-third-party requires the cef-static[strict-platform] feature")
+    endif()
+    if(_mode STREQUAL "release-import")
+        message(FATAL_ERROR "The published engine-only SDK cannot be rebranded as static-third-party")
+    endif()
+elseif("strict-platform" IN_LIST FEATURES)
+    message(FATAL_ERROR "The strict-platform feature requires the static-third-party build contract")
 endif()
 vcpkg_find_acquire_program(PYTHON3)
 include("${CEF_RECIPE_SOURCE}/vcpkg/ports/cef-static/acquire_git.cmake")
@@ -57,17 +67,35 @@ elseif(_mode STREQUAL "source")
         set(_work "$ENV{CEF_STATIC_WORK}")
     endif()
     file(MAKE_DIRECTORY "${_work}")
+    set(_platform_args)
+    set(_platform_export_args)
+    set(_cef_out "CEF_Static_Release_x64")
+    if(_profile STREQUAL "static-third-party" AND VCPKG_TARGET_IS_LINUX)
+        foreach(_name CEF_STATIC_PLATFORM_MANIFEST CEF_STATIC_PLATFORM_PREFIX CEF_STATIC_PLATFORM_SHA256)
+            if(NOT DEFINED ENV{${_name}} OR "$ENV{${_name}}" STREQUAL "")
+                message(FATAL_ERROR "Linux static-third-party requires ${_name}")
+            endif()
+        endforeach()
+        set(_platform_args
+            --platform-manifest "$ENV{CEF_STATIC_PLATFORM_MANIFEST}"
+            --platform-prefix "$ENV{CEF_STATIC_PLATFORM_PREFIX}"
+            --platform-sha256 "$ENV{CEF_STATIC_PLATFORM_SHA256}")
+        set(_platform_export_args ${_platform_args})
+        set(_cef_out "CEF_Static_Platform_Release_x64")
+    endif()
     vcpkg_execute_required_process(
         COMMAND "${PYTHON3}" "${CEF_RECIPE_SOURCE}/vcpkg/ports/cef-static/source_build.py" build
             --work "${_work}" --logs "${_logs}" --jobs "${VCPKG_CONCURRENCY}"
+            ${_platform_args}
         WORKING_DIRECTORY "${CURRENT_BUILDTREES_DIR}"
         LOGNAME cef-native-source-verify
     )
     vcpkg_execute_required_process(
         COMMAND "${PYTHON3}" "${CEF_RECIPE_SOURCE}/vcpkg/ports/cef-static/export_static.py"
             --source "${_work}/download/chromium/src"
-            --out "${_work}/download/chromium/src/out/CEF_Static_Release_x64"
+            --out "${_work}/download/chromium/src/out/${_cef_out}"
             --diagnostics "${_logs}" --prefix "${CURRENT_PACKAGES_DIR}"
+            ${_platform_export_args}
         WORKING_DIRECTORY "${CURRENT_BUILDTREES_DIR}"
         LOGNAME cef-native-export
     )
