@@ -158,17 +158,13 @@ def selected_member(name: str, package_name: str, source_triplet: str) -> PurePo
 def install_bundle(lock: dict, triplet: str, directory: Path, destination: Path, *, required_profile: str = "engine-static") -> dict:
     validate_lock(lock)
     require(triplet in TRIPLETS, "Unsupported native Release triplet")
-    # The existing receipt proves only the engine-static producer state. A
-    # Windows payload may be reused as bytes for a strict build because that
-    # profile has no external Linux-style target prefix, but it still requires
-    # a NEW relocated consumer/module/archive qualification downstream.
-    strict_windows = (
-        required_profile == "static-third-party"
-        and triplet == "x64-windows-static-release"
-    )
+    # Published payloads were produced and certified as engine-static only.
+    # They may be imported as immutable engine bytes, but cannot be promoted to
+    # the strict C++ profile because the Windows archive carries a different
+    # C++ standard-library boundary than the native MSVC-STL consumer.
     require(
-        required_profile == "engine-static" or strict_windows,
-        "This release payload cannot be used for the requested strict profile",
+        required_profile == "engine-static",
+        "This release payload cannot be used for a strict profile; build CEF from source",
     )
     entry = lock["platforms"][triplet]
     manifest_path = directory / entry["manifest"]["name"]
@@ -219,7 +215,7 @@ def install_bundle(lock: dict, triplet: str, directory: Path, destination: Path,
                   "system_libraries_static": receipt["system_libraries_static"],
                   "sandbox_verified": receipt["sandbox_verified"], "imported_files": count,
                   "requested_profile": required_profile,
-                  "strict_requalification_required": strict_windows,
+                  "strict_requalification_required": False,
                   "consumer_requalification_required": True}
         (stage / "share/cef-static/upstream-sdk-receipt.json").write_bytes(sdk.json_bytes(receipt))
         (stage / "share/cef-static/acquisition.json").write_bytes(sdk.json_bytes(result))
@@ -253,11 +249,8 @@ def main() -> None:
     parser.add_argument("--required-profile", choices=("engine-static", "static-third-party", "fully-static"), required=True)
     args = parser.parse_args()
     require((os.name == "nt") == (args.triplet == "x64-windows-static-release"), "A native host is required")
-    if args.required_profile == "fully-static":
-        raise ValueError("Release payload is not certified for a fully-static profile")
-    if (args.required_profile == "static-third-party"
-            and args.triplet != "x64-windows-static-release"):
-        raise ValueError("static-third-party release reuse is Windows-only")
+    if args.required_profile != "engine-static":
+        raise ValueError("Release payload is engine-static only; strict profiles require source builds")
     lock = read_json(args.lock)
     directory = obtain(lock, args.triplet, args.cache.resolve())
     install_bundle(lock, args.triplet, directory, args.prefix.resolve(), required_profile=args.required_profile)
