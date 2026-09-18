@@ -149,4 +149,14 @@ class ReceiptTests(unittest.TestCase):
         with self.assertRaises(RuntimeError): module.verify_reference({})
 
 
+    def test_cpp_support_normalizes_windows_paths_and_matches_cef_standard(self):
+        support = (Path(__file__).resolve().parents[1] / 'cpp_support/CMakeLists.txt').read_text()
+        self.assertIn('cmake_path(CONVERT "${CEF_RECIPE_SOURCE}"', support)
+        self.assertIn('cmake_path(CONVERT "${CEF_PACKAGE_PREFIX}"', support)
+        self.assertIn('NOMINMAX', support)
+        self.assertIn('WIN32_LEAN_AND_MEAN', support)
+        self.assertIn('cxx_std_20', support)
+        self.assertNotIn('cxx_std_23', support)
+
+
 if __name__=='__main__': unittest.main()
