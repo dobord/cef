@@ -42,6 +42,21 @@ def main() -> None:
     (evidence / "acquisition.json").write_bytes(sdk_import.sdk.json_bytes(acquisition))
     shutil.copyfile(prefix / "share/cef-static/static-link-inventory.json", evidence / "upstream-link-inventory.json")
     shutil.rmtree(work / "download")
+    if windows:
+        cpp_build = work / "cpp-support-build"
+        cpp_install = work / "cpp-support-install"
+        run([
+            "cmake", "-S", ROOT / "vcpkg/ports/cef-static/cpp_support",
+            "-B", cpp_build, "-G", "Visual Studio 17 2022", "-A", "x64",
+            "-DCEF_RECIPE_SOURCE=" + str(ROOT),
+            "-DCEF_PACKAGE_PREFIX=" + str(prefix),
+        ], work)
+        run(["cmake", "--build", cpp_build, "--config", "Release", "--parallel", "2"], work)
+        run(["cmake", "--install", cpp_build, "--config", "Release",
+             "--prefix", cpp_install], work)
+        archive = cpp_install / "lib/cef-static/cef_cpp_support.lib"
+        if not archive.is_file() or archive.stat().st_size == 0:
+            raise ValueError("Native CEF C++ support archive was not produced")
     build = work / "consumer"
     command = ["cmake", "-S", ROOT / "vcpkg/static/consumer", "-B", build,
                "-DCMAKE_PREFIX_PATH=" + str(prefix),
