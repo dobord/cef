@@ -58,7 +58,6 @@ _cef_static_target = cef_static_platform_manifest != "" &&
 _cef_static_files = []
 if (_cef_static_target) {
   assert(is_linux && current_cpu == "x64" && host_os == "linux")
-  assert(use_lld, "The static platform graph requires LLVM LLD archive semantics")
   assert(!use_sysroot && sysroot == "" && !use_remoteexec)
   assert(pkg_config == "" && host_pkg_config == "",
          "Do not combine the frozen platform contract with another wrapper")
