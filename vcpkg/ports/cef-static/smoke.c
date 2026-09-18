@@ -73,7 +73,58 @@ RC_TYPE(cef_render_handler_t, render)
 RC_TYPE(cef_load_handler_t, load)
 
 static int javascript_ok, paint_ok, renderer_pid, renderer_modules_ok;
+static int renderer_third_party_modules_ok;
 static int closing, passed;
+
+static int strict_third_party_mode(void) {
+  const char* value = getenv("CEF_STATIC_STRICT_THIRD_PARTY");
+  return value && strcmp(value, "1") == 0;
+}
+
+static int third_party_modules_are_static(void) {
+  if (!strict_third_party_mode()) return 1;
+#if defined(_WIN32)
+  wchar_t windows[MAX_PATH] = {0}, executable[MAX_PATH] = {0};
+  if (!GetWindowsDirectoryW(windows, MAX_PATH) ||
+      !GetModuleFileNameW(NULL, executable, MAX_PATH)) return 0;
+  size_t n = wcslen(windows);
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+  if (snapshot == INVALID_HANDLE_VALUE) return 0;
+  MODULEENTRY32W item = {0}; item.dwSize = sizeof(item);
+  int ok = Module32FirstW(snapshot, &item) != 0;
+  if (ok) do {
+    if (_wcsicmp(item.szExePath, executable) == 0) continue;
+    if (_wcsnicmp(item.szExePath, windows, n) != 0 ||
+        (item.szExePath[n] != L'\\' && item.szExePath[n] != L'/')) ok = 0;
+  } while (ok && Module32NextW(snapshot, &item));
+  CloseHandle(snapshot);
+  return ok;
+#else
+  static const char* allowed[] = {
+    "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0",
+    "librt.so.1", "libresolv.so.2", "ld-linux-x86-64.so.2"
+  };
+  FILE* maps = fopen("/proc/self/maps", "r");
+  if (!maps) return 0;
+  char line[8192]; int ok = 1;
+  while (ok && fgets(line, sizeof(line), maps)) {
+    char* slash = strrchr(line, '/');
+    if (!slash || !strstr(slash + 1, ".so")) continue;
+    char* name = slash + 1;
+    size_t length = strcspn(name, "\r\n");
+    int allowed_name = 0;
+    for (size_t i = 0; i < sizeof(allowed)/sizeof(allowed[0]); ++i) {
+      if (strlen(allowed[i]) == length && memcmp(name, allowed[i], length) == 0) {
+        allowed_name = 1; break;
+      }
+    }
+    if (!allowed_name) ok = 0;
+  }
+  if (ferror(maps)) ok = 0;
+  fclose(maps);
+  return ok;
+#endif
+}
 
 static cef_string_t text(const char* value) {
   cef_string_t result = {0};
@@ -139,17 +190,21 @@ static void close_browser(cef_browser_t* browser) {
 static void finish(cef_browser_t* browser) {
   if (closing || !javascript_ok || !paint_ok || renderer_pid <= 0 ||
       renderer_pid == process_id() || !renderer_modules_ok) return;
+  int strict = strict_third_party_mode();
+  if (strict && !renderer_third_party_modules_ok) return;
   closing = 1;
   int modules = engine_modules_are_static();
-  if (modules) {
+  int third_party = third_party_modules_are_static();
+  if (modules && third_party) {
     FILE* proof = fopen("smoke-result.json", "w");
     if (proof) {
       int written = fprintf(proof,
         "{\"cef\":\"%s\",\"engine\":\"static\",\"interface\":\"capi\","
         "\"javascript\":true,\"paint\":true,\"browser_pid\":%d,"
         "\"renderer_pid\":%d,\"browser_modules_clean\":true,"
-        "\"renderer_modules_clean\":true,\"sandbox_verified\":false}\n",
-        CEF_VERSION, process_id(), renderer_pid);
+        "\"renderer_modules_clean\":true,\"third_party_modules_static\":%s,"
+        "\"sandbox_verified\":false}\n",
+        CEF_VERSION, process_id(), renderer_pid, strict ? "true" : "false");
       int flushed = fclose(proof);
       passed = written > 0 && flushed == 0;
     }
@@ -204,6 +259,7 @@ static int CEF_CALLBACK message_received(cef_client_t* self, cef_browser_t* brow
     cef_list_value_t* args = message->get_argument_list(message);
     renderer_pid = args->get_int(args, 0);
     renderer_modules_ok = args->get_bool(args, 1);
+    renderer_third_party_modules_ok = args->get_bool(args, 2);
     DROP(args); finish(browser);
   }
   DROP(message); DROP(frame); DROP(browser);
@@ -251,6 +307,7 @@ static void CEF_CALLBACK context_created(cef_render_process_handler_t* self,
     cef_list_value_t* args = msg->get_argument_list(msg);
     args->set_int(args, 0, process_id());
     args->set_bool(args, 1, engine_modules_are_static());
+    args->set_bool(args, 2, third_party_modules_are_static());
     DROP(args);
     frame->send_process_message(frame, PID_BROWSER, msg); /* transfers msg */
   }
