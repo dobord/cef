@@ -57,8 +57,9 @@ config("no_exceptions") {
             patch_source.EDITS.clear()
             patch_source.patch_windows_msvc_stl_warnings(root)
             changed = path.read_text()
-            self.assertEqual(changed.count("-Wctad-maybe-unsupported"), 1)
-            self.assertIn('if (!is_win) {', changed)
+            self.assertEqual(changed.count("-Wctad-maybe-unsupported"), 2)
+            self.assertIn('if (is_win) {', changed)
+            self.assertIn('cflags += [ "-Wno-ctad-maybe-unsupported" ]', changed)
             self.assertIn('cflags += [ "-Wctad-maybe-unsupported" ]', changed)
             compiler_changed = compiler.read_text()
             self.assertEqual(
