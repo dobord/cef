@@ -51,10 +51,12 @@ class DriverTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             driver.strict_linux_dependencies(good + " Shared library: [libX11.so.6]\n")
 
-    def test_strict_installer_never_rebrands_release_import(self):
+    def test_strict_installer_allows_only_windows_release_requalification(self):
         text = (ROOT / "vcpkg/integration/install.cmake").read_text()
         self.assertIn('cef-static[strict-platform]', text)
-        self.assertIn('The published engine-only SDK cannot be rebranded as static-third-party', text)
+        self.assertIn('_mode STREQUAL "release-import" AND NOT VCPKG_TARGET_IS_WINDOWS', text)
+        self.assertIn('static-third-party release reuse is Windows-only', text)
+        self.assertIn('--required-profile "${_profile}"', text)
         self.assertIn('CEF_STATIC_PLATFORM_MANIFEST', text)
         self.assertIn('CEF_Static_Platform_Release_x64', text)
 
