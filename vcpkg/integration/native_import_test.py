@@ -48,8 +48,8 @@ def main() -> None:
         run([
             "cmake", "-S", ROOT / "vcpkg/ports/cef-static/cpp_support",
             "-B", cpp_build, "-G", "Visual Studio 17 2022", "-A", "x64",
-            "-DCEF_RECIPE_SOURCE=" + str(ROOT),
-            "-DCEF_PACKAGE_PREFIX=" + str(prefix),
+            "-DCEF_RECIPE_SOURCE=" + ROOT.as_posix(),
+            "-DCEF_PACKAGE_PREFIX=" + prefix.as_posix(),
         ], work)
         run(["cmake", "--build", cpp_build, "--config", "Release", "--parallel", "2"], work)
         run(["cmake", "--install", cpp_build, "--config", "Release",
