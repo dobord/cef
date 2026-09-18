@@ -34,6 +34,24 @@ class PatchSourceTests(unittest.TestCase):
 """,
                 encoding="utf-8",
             )
+            webrtc = root / "third_party/webrtc/BUILD.gn"
+            webrtc.parent.mkdir(parents=True)
+            webrtc.write_text(
+                """config("common_config") {
+  cflags = []
+  if (is_clang) {
+    cflags += [
+      "-Wshadow",
+
+      # See https://reviews.llvm.org/D56731 for details about this
+      # warning.
+      "-Wctad-maybe-unsupported",
+    ]
+  }
+}
+""",
+                encoding="utf-8",
+            )
             compiler = root / "build/config/compiler/BUILD.gn"
             compiler.parent.mkdir(parents=True)
             compiler.write_text(
@@ -60,6 +78,10 @@ config("no_exceptions") {
             self.assertEqual(changed.count('cflags += [ "-Wctad-maybe-unsupported" ]'), 1)
             self.assertEqual(changed.count('cflags += [ "-Wno-ctad-maybe-unsupported" ]'), 1)
             self.assertIn('if (is_win) {', changed)
+            webrtc_changed = webrtc.read_text()
+            self.assertIn('cflags += [ "-Wno-ctad-maybe-unsupported" ]', webrtc_changed)
+            self.assertIn('cflags += [ "-Wctad-maybe-unsupported" ]', webrtc_changed)
+            self.assertNotIn('cflags += [\n      "-Wshadow",', webrtc_changed)
             compiler_changed = compiler.read_text()
             self.assertEqual(
                 compiler_changed.count(
@@ -69,7 +91,7 @@ config("no_exceptions") {
             )
             self.assertIn('"_HAS_EXCEPTIONS=1",', compiler_changed)
             self.assertIn('"_HAS_EXCEPTIONS=0",', compiler_changed)
-            self.assertEqual(len(patch_source.EDITS), 4)
+            self.assertEqual(len(patch_source.EDITS), 5)
 
 
 if __name__ == "__main__":
