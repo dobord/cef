@@ -18,8 +18,17 @@ target_compile_definitions(cef_cpp_support PRIVATE
   CEF_STATIC
   CEF_API_VERSION=15200
 )
-target_compile_features(cef_cpp_support PRIVATE cxx_std_23)
+target_compile_features(cef_cpp_support PRIVATE cxx_std_20)
 if(MSVC)
+  # cef_logging.cc includes windows.h before <algorithm>; match the official
+  # CEF Windows client flags so min/max macros cannot corrupt std::min/max.
+  target_compile_definitions(cef_cpp_support PRIVATE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    UNICODE
+    _UNICODE
+  )
+  target_compile_options(cef_cpp_support PRIVATE /GR- /utf-8)
   set_property(TARGET cef_cpp_support PROPERTY
     MSVC_RUNTIME_LIBRARY MultiThreaded)
 endif()
