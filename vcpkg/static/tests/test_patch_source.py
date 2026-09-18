@@ -34,13 +34,42 @@ class PatchSourceTests(unittest.TestCase):
 """,
                 encoding="utf-8",
             )
+            compiler = root / "build/config/compiler/BUILD.gn"
+            compiler.parent.mkdir(parents=True)
+            compiler.write_text(
+                """config("exceptions") {
+  if (is_win) {
+    if (!use_custom_libcxx) {
+      defines = [ "_HAS_EXCEPTIONS=1" ]
+    }
+  }
+}
+config("no_exceptions") {
+  if (is_win) {
+    if (!use_custom_libcxx) {
+      defines = [ "_HAS_EXCEPTIONS=0" ]
+    }
+  }
+}
+""",
+                encoding="utf-8",
+            )
             patch_source.EDITS.clear()
             patch_source.patch_windows_msvc_stl_warnings(root)
             changed = path.read_text()
             self.assertEqual(changed.count("-Wctad-maybe-unsupported"), 1)
             self.assertIn('if (!is_win) {', changed)
             self.assertIn('cflags += [ "-Wctad-maybe-unsupported" ]', changed)
-            self.assertEqual(len(patch_source.EDITS), 2)
+            compiler_changed = compiler.read_text()
+            self.assertEqual(
+                compiler_changed.count(
+                    "_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING"
+                ),
+                2,
+            )
+            self.assertIn('"_HAS_EXCEPTIONS=1",', compiler_changed)
+            self.assertIn('"_HAS_EXCEPTIONS=0",', compiler_changed)
+            self.assertEqual(len(patch_source.EDITS), 4)
 
 
 if __name__ == "__main__":

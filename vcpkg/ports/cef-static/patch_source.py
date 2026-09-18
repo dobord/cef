@@ -107,6 +107,27 @@ def patch_windows_msvc_stl_warnings(root: Path) -> None:
 ''')
 
 
+    # MSVC STL deliberately deprecates the C++20 shared_ptr atomic free
+    # functions still used by pinned Perfetto. Chromium keeps deprecation
+    # warnings as errors, so silence exactly this STL compatibility diagnostic
+    # only when the Windows target uses the platform STL.
+    compiler = 'build/config/compiler/BUILD.gn'
+    replace(root, compiler,
+            '      defines = [ "_HAS_EXCEPTIONS=1" ]\n',
+            '''      defines = [
+        "_HAS_EXCEPTIONS=1",
+        "_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING",
+      ]
+''')
+    replace(root, compiler,
+            '      defines = [ "_HAS_EXCEPTIONS=0" ]\n',
+            '''      defines = [
+        "_HAS_EXCEPTIONS=0",
+        "_SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING",
+      ]
+''')
+
+
 def patch_gpu_init_filter_set(root: Path) -> None:
     # filter_set is read by either Vulkan or the ChromeOS Dawn filter. A
     # Vulkan-disabled non-ChromeOS Ozone build has neither reader. Keep both
