@@ -29,6 +29,20 @@ template("pkg_config") {
         with self.assertRaises(ValueError): gn.patch_template(source+source)
         with self.assertRaises(ValueError): gn.patch_template('unreviewed')
 
+    def test_static_platform_disables_dynamic_gpu_driver_paths(self):
+        dri = '''import("//build/config/linux/pkg_config.gni")
+
+pkg_config("dri") {
+  packages = [ "dri" ]
+}
+'''
+        patched = gn.patch_direct('build/config/linux/dri/BUILD.gn', dri)
+        self.assertIn('config("dri") {}', patched)
+        self.assertIn('pkg_config("dri")', patched)
+        args = gn.gn_args(Path('/manifest'), Path('/prefix'), 'a'*64)
+        self.assertIs(args['use_vaapi'], False)
+        self.assertIs(args['use_v4l2_codec'], False)
+
     def test_only_reviewed_cups_and_alsa_call_sites(self):
         cups=gn.patch_direct('printing/BUILD.gn','  if (is_chromeos_device) {\n')
         self.assertIn('is_linux && cef_static_platform_manifest != ""',cups)

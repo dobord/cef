@@ -21,6 +21,7 @@ DIRECT_BLOBS = {
     'printing/BUILD.gn': '39be301bc4d0e16e80deee9b9029d03372919384',
     'media/audio/BUILD.gn': '42f2bcc4ed7bcbb65e7c6e07b8f82b2d8825fd1b',
     'media/midi/BUILD.gn': 'b220567cb68e457a5cd2ec6145bc3d4b08612dab',
+    'build/config/linux/dri/BUILD.gn': 'e3a0a83a99fefc27146d7ee4a3096ccea4ddff2f',
 }
 MARKER = 'cef-static-platform-gn.json'
 # The reference link inventory's complete external module set. OS ABI libraries
@@ -94,6 +95,15 @@ template("pkg_config") {
 
 
 def patch_direct(path: str, text: str) -> str:
+    if path == 'build/config/linux/dri/BUILD.gn':
+        text = once(text, 'pkg_config("dri") {\n',
+                    'if (cef_static_platform_manifest != "") {\n'
+                    '  # DRI_DRIVER_DIR names dynamic Mesa driver modules. The\n'
+                    '  # static profile deliberately carries no runtime DRI .so path.\n'
+                    '  config("dri") {}\n'
+                    '} else {\n'
+                    '  pkg_config("dri") {\n')
+        return text + '}\n'
     if path == 'printing/BUILD.gn':
         return once(text, '  if (is_chromeos_device) {\n',
                     '  if (is_chromeos_device || (is_linux && cef_static_platform_manifest != "")) {\n')
@@ -168,7 +178,8 @@ def gn_args(manifest: Path, prefix: Path, sha256: str) -> dict:
     return {'cef_static_platform_manifest': str(manifest),
             'cef_static_platform_prefix': str(prefix),
             'cef_static_platform_sha256': sha256,
-            'use_sysroot': False, 'use_remoteexec': False, 'use_lld': True}
+            'use_sysroot': False, 'use_remoteexec': False, 'use_lld': True,
+            'use_vaapi': False, 'use_v4l2_codec': False}
 
 
 def guard(source: Path, selection) -> None:
