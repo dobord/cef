@@ -380,7 +380,7 @@ def static_profile(merged: dict, windows: bool) -> dict:
 
 # Exact one-step source migration: do not rerun the whole non-idempotent patch set
 # or discard the already compiled workspace. Every other recipe change fails.
-X11_RECIPE_UPGRADES = {'4c71c50aa1ef6da3edfa14b65509deb9baaa50f96c884f41d4710ebb8191705e': '70ec22eabe090fe9381f48821983ef60eb1863f2fb8582e5aa6148ec14fcbd33', 'e1102bb26d5b0247c07f698aa937e344fdf5be7d5c8c7093de5ee2df14f874c6': '0eb3e71b998a2277568deaf90c7b73ec14ec201199b229a345aece07b1ca5db2'}
+X11_RECIPE_UPGRADES = {'4c71c50aa1ef6da3edfa14b65509deb9baaa50f96c884f41d4710ebb8191705e': '41340bd6fcdf6d7a58ba7103b3c1c44df0f94dd7f48efb34ea1debd66b53e07b', 'e1102bb26d5b0247c07f698aa937e344fdf5be7d5c8c7093de5ee2df14f874c6': 'e07ed95e4f00f5432292bd4652704b9ecf7335edeb07486fd8ad60a4d1691da7'}
 
 
 def upgrade_x11_recipe(source: Path, logs: Path, previous: str, recipe: str) -> None:
