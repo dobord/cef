@@ -82,6 +82,9 @@ class ExecutionTests(unittest.TestCase):
         data = json.loads((self.logs/'static-smoke-status.json').read_text())
         self.assertEqual(data['status'], 'timed_out'); self.assertNotEqual(data['exit_code'], 0)
 
+    def test_windows_process_snapshot_timeout_stays_bounded(self):
+        self.assertEqual(runtime.WINDOWS_SNAPSHOT_TIMEOUT_SECONDS, 30)
+
     def test_native_process_snapshot_for_live_python_child(self):
         child = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(30)'],
                                  start_new_session=os.name != 'nt')
