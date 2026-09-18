@@ -101,7 +101,12 @@ def patch_windows_msvc_stl_warnings(root: Path) -> None:
             '''      "-Wunused-but-set-variable",
       "-Wunused-macros",
     ]
-    if (!is_win) {
+    if (is_win) {
+      # Native MSVC STL uses valid CTAD patterns without deduction guides in
+      # headers such as <functional>. Keep /WX, but suppress only this Clang
+      # diagnostic for the reviewed Windows platform-STL target.
+      cflags += [ "-Wno-ctad-maybe-unsupported" ]
+    } else {
       cflags += [ "-Wctad-maybe-unsupported" ]
     }
 ''')
