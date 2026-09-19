@@ -67,8 +67,9 @@ class DiscoveryTests(unittest.TestCase):
             self.run.side_effect=None;self.run.return_value=value
             with self.subTest(value=value),self.assertRaises(RuntimeError):self.discover()
 
-    def test_invalid_toolset_version_is_rejected(self):
-        for value in ['../other','14.44.35207/evil','15.0.12345']:
+    def test_invalid_or_unreviewed_toolset_version_is_rejected(self):
+        for value in ['../other','14.44.35207/evil','15.0.12345',
+                      '14.43.34808','14.45.12345']:
             self.version_file.write_text(value)
             with self.subTest(value=value),self.assertRaises(RuntimeError):self.discover()
 
