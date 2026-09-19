@@ -81,6 +81,22 @@ class NativeGraphTests(unittest.TestCase):
             self.assertEqual(text.count('"gtk+-unix-print-3.0"'), 1)
             self.assertIn('packages += [ "gtk+-unix-print-3.0" ]', text)
 
+    def test_windows_angle_webgpu_drops_private_libcpp_config_header(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'third_party/angle/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp'
+            target.parent.mkdir(parents=True)
+            target.write_text('''#include "common/unsafe_buffers.h"
+
+#include <__config>
+
+#include "common/Color.h"
+''')
+            patcher.patch_windows_angle_libcpp_private_include(root)
+            text = target.read_text()
+            self.assertNotIn('<__config>', text)
+            self.assertIn('#include "common/Color.h"', text)
+
     def test_windows_rrect_stream_operator_gets_direct_ostream_include(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -343,6 +343,24 @@ def patch_windows_rrect_ostream_include(root: Path) -> None:
 ''')
 
 
+def patch_windows_angle_libcpp_private_include(root: Path) -> None:
+    # ANGLE's WebGPU framebuffer source directly includes libc++'s private
+    # <__config> header but does not use any symbol from it. Chromium's native
+    # Windows target is intentionally built against the reviewed MSVC STL, so
+    # this private libc++ include must not participate in the platform-STL graph.
+    replace(root, 'third_party/angle/src/libANGLE/renderer/wgpu/FramebufferWgpu.cpp',
+            '''#include "common/unsafe_buffers.h"
+
+#include <__config>
+
+#include "common/Color.h"
+''',
+            '''#include "common/unsafe_buffers.h"
+
+#include "common/Color.h"
+''')
+
+
 def patch_static_cefclient_pkgconfig(root: Path) -> None:
     # The static engine root does not build cefclient. GN still evaluates the
     # cefclient pkg_config target while loading //cef/BUILD.gn, so do not query
@@ -419,6 +437,7 @@ def patch(root: Path) -> None:
     patch_windows_msvc_consteval_language_tags(root)
     patch_windows_missing_string_include(root)
     patch_windows_rrect_ostream_include(root)
+    patch_windows_angle_libcpp_private_include(root)
     patch_static_cefclient_pkgconfig(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)
