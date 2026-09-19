@@ -54,6 +54,7 @@ class DiscoveryTests(unittest.TestCase):
         for name,data in before.items(): self.assertEqual(Path(name).read_bytes(),data)
         proof=json.loads((self.logs/'windows-audit-tool.json').read_text())
         self.assertEqual(proof['toolset_version'],'14.44.35207')
+        self.assertEqual(proof['clang_msc_version'],1944)
         self.assertEqual(proof['executable_sha256'],build.digest(self.binary))
         self.assertFalse(proof['engine_runtime_verified'])
 
