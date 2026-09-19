@@ -330,6 +330,7 @@ def ensure_windows_dumpbin(source: Path, work: Path, logs: Path) -> Path:
         raise RuntimeError('DUMPBIN self-probe did not decode an x64 PE image')
     (logs/'windows-audit-tool.json').write_text(json.dumps({
         'schema': 1, 'auditor': 'Microsoft DUMPBIN', 'toolset_version': version,
+        'clang_msc_version': 1944,
         'auditor_version': match.group(1), 'installation': str(vs),
         'executable': str(binary), 'executable_sha256': digest(binary),
         'vswhere_sha256': digest(vswhere), 'runner_image': os.environ.get('ImageVersion'),
