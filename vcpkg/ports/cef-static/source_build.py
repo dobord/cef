@@ -306,6 +306,11 @@ def ensure_windows_dumpbin(source: Path, work: Path, logs: Path) -> Path:
     version = version_file.read_text(encoding='utf-8-sig').strip()
     if not re.fullmatch(r'14\.[0-9]+\.[0-9]+', version):
         raise RuntimeError('Invalid default MSVC toolset version')
+    if not version.startswith('14.44.'):
+        raise RuntimeError(
+            'Windows static CEF profile requires reviewed MSVC toolset 14.44.x; '
+            'runner toolchain changed and needs requalification'
+        )
     toolset = vs/'VC/Tools/MSVC'/version
     binary = toolset/'bin/Hostx64/x64/dumpbin.exe'
     if not binary.is_file() or binary.is_symlink() or not binary.resolve().is_relative_to(vs.resolve()):
