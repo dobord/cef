@@ -60,6 +60,43 @@ class NativeGraphTests(unittest.TestCase):
         self.assertIn('--root-target=//cef:cef_static_smoke', command)
         self.assertIn('--root-pattern=//cef:cef_static_smoke', command)
         self.assertIn('--fail-on-unused-args', command)
+    def test_static_engine_skips_cefclient_print_pkgconfig(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'cef/BUILD.gn'
+            target.parent.mkdir(parents=True)
+            target.write_text('''    pkg_config("gtk") {
+      packages = [
+        "gmodule-2.0",
+        "gtk+-3.0",
+        "gthread-2.0",
+        "gtk+-unix-print-3.0",
+        "xi",
+      ]
+    }
+''')
+            patcher.patch_static_cefclient_pkgconfig(root)
+            text = target.read_text()
+            self.assertIn('if (!cef_static_engine)', text)
+            self.assertEqual(text.count('"gtk+-unix-print-3.0"'), 1)
+            self.assertIn('packages += [ "gtk+-unix-print-3.0" ]', text)
+
+    def test_windows_cert_util_gets_direct_string_include(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'net/tools/transport_security_state_generator/cert_util.h'
+            target.parent.mkdir(parents=True)
+            target.write_text('''#include <stdint.h>
+
+#include <string_view>
+''')
+            patcher.patch_windows_missing_string_include(root)
+            self.assertEqual(target.read_text(), '''#include <stdint.h>
+
+#include <string>
+#include <string_view>
+''')
+
     def test_windows_object_layout(self):
         values = ['obj/chrome/chrome_elf/chrome_elf.chrome_elf_main.obj',
                   'obj/chrome/install_static/secondary_module.initialize_from_primary_module.obj',

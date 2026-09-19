@@ -312,6 +312,52 @@ constexpr std::optional<LanguageTag> LanguageTag::GetParentTag() const {
 ''')
 
 
+def patch_windows_missing_string_include(root: Path) -> None:
+    # Chromium's cert_util.h exposes std::string in its public declaration but
+    # only includes <string_view>. Older transitive MSVC STL includes masked
+    # this; the reviewed 14.44 toolset correctly requires the direct include.
+    replace(root, 'net/tools/transport_security_state_generator/cert_util.h',
+            '''#include <stdint.h>
+
+#include <string_view>
+''',
+            '''#include <stdint.h>
+
+#include <string>
+#include <string_view>
+''')
+
+
+def patch_static_cefclient_pkgconfig(root: Path) -> None:
+    # The static engine root does not build cefclient. GN still evaluates the
+    # cefclient pkg_config target while loading //cef/BUILD.gn, so do not query
+    # gtk+-unix-print-3.0 from the closed target manifest for this profile.
+    # Ordinary CEF/cefclient builds retain the upstream printing dependency.
+    replace(root, 'cef/BUILD.gn',
+            '''    pkg_config("gtk") {
+      packages = [
+        "gmodule-2.0",
+        "gtk+-3.0",
+        "gthread-2.0",
+        "gtk+-unix-print-3.0",
+        "xi",
+      ]
+    }
+''',
+            '''    pkg_config("gtk") {
+      packages = [
+        "gmodule-2.0",
+        "gtk+-3.0",
+        "gthread-2.0",
+        "xi",
+      ]
+      if (!cef_static_engine) {
+        packages += [ "gtk+-unix-print-3.0" ]
+      }
+    }
+''')
+
+
 def patch_gpu_init_filter_set(root: Path) -> None:
     # filter_set is read by either Vulkan or the ChromeOS Dawn filter. A
     # Vulkan-disabled non-ChromeOS Ozone build has neither reader. Keep both
@@ -356,6 +402,8 @@ def patch(root: Path) -> None:
     patch_windows_msvc_version(root)
     patch_windows_msvc_stl_warnings(root)
     patch_windows_msvc_consteval_language_tags(root)
+    patch_windows_missing_string_include(root)
+    patch_static_cefclient_pkgconfig(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)
     replace(root, 'cef/libcef/features/features.gni', '  enable_cef = true\n',
