@@ -16,6 +16,7 @@ import shlex
 import stat
 import struct
 import subprocess
+import sys
 
 OS_LIBRARIES = frozenset({'c', 'm', 'dl', 'pthread', 'rt', 'resolv'})
 MODULE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.+-]*\Z')
