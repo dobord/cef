@@ -130,6 +130,12 @@ class ContractTests(unittest.TestCase):
             if name.endswith('/gtk+-unix-print-3.0.pc')
         ]
         self.assertEqual(len(metadata), 1)
+        header = 'include/gtk-3.0/unix-print/gtk/gtkunixprint.h'
+        self.assertIn(header, value['files'])
+        value_without_header = copy.deepcopy(value)
+        del value_without_header['files'][header]
+        with self.assertRaisesRegex(ValueError, 'bytes are not frozen'):
+            pc.query(value_without_header, self.prefix, ['gtk+-unix-print-3.0'])
         value_without_pc = copy.deepcopy(value)
         del value_without_pc['files'][metadata[0]]
         with self.assertRaisesRegex(ValueError, 'metadata is not uniquely frozen'):
@@ -137,9 +143,25 @@ class ContractTests(unittest.TestCase):
 
     def test_unknown_module_and_filter_cannot_remove_library(self):
         value=self.freeze()
-        with self.assertRaisesRegex(ValueError,'uncaptured'): pc.query(value,self.prefix,['unseen'])
-        with self.assertRaisesRegex(ValueError,'discard'): pc.query(value,self.prefix,['fixture'],['liba'])
-        self.assertNotIn('-DFIXTURE=1',pc.query(value,self.prefix,['fixture'],['FIXTURE'])[1])
+        with self.assertRaisesRegex(ValueError,'uncaptured'):
+            pc.query(value,self.prefix,['unseen'])
+        with self.assertRaisesRegex(ValueError,'Unreviewed GN static dependency filter'):
+            pc.query(value,self.prefix,['fixture'],['liba'])
+        with self.assertRaisesRegex(ValueError,'Unreviewed GN static dependency filter'):
+            pc.query(value,self.prefix,['fixture'],['FIXTURE'])
+
+    def test_only_reviewed_chromium_filters_remove_static_inputs(self):
+        value=self.freeze()
+        entry=value['modules']['fixture']
+        entry['libraries'] += ['lib/libssl3.a','lib/libfreetype.a']
+        entry['includes'] += ['include/freetype2']
+        (self.prefix/'include/freetype2').mkdir()
+        nss = pc.query(copy.deepcopy(value), self.prefix, ['fixture'], ['-lssl3'])
+        self.assertFalse(any(path.endswith('/libssl3.a') for path in nss[2]))
+        self.assertTrue(any(path.endswith('/libfreetype.a') for path in nss[2]))
+        pango = pc.query(copy.deepcopy(value), self.prefix, ['fixture'], ['freetype'])
+        self.assertFalse(any(path.endswith('/libfreetype.a') for path in pango[2]))
+        self.assertNotIn(str(self.prefix/'include/freetype2'), pango[0])
 
     def test_cli_with_gn_order_and_version_modes(self):
         self.freeze()

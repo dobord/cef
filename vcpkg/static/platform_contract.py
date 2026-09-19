@@ -34,6 +34,12 @@ HEADER_ONLY_MODULES = {
     },
 }
 
+# Chromium 152 has exactly two reviewed Linux pkg-config filters in the static
+# CEF root: NSS excludes its TLS archive, and Pangocairo excludes FreeType
+# because Chromium supplies those implementations itself. Preserve that
+# upstream behavior explicitly; every other static filter remains fail-closed.
+REVIEWED_FILTERS = frozenset({'-lssl3', 'freetype'})
+
 
 def require(condition, message):
     if not condition:
@@ -214,6 +220,28 @@ def capture(prefix: Path, pkgconf: Path, modules: list[str]) -> dict:
             regular(prefix, folder, directory=True)
             for path in (prefix / folder).rglob('*.pc'):
                 paths.add(path.relative_to(prefix).as_posix())
+
+    # Header-only GN aliases are not link modules, but their metadata and every
+    # reachable header byte are still immutable members of the same contract.
+    for name, alias in HEADER_ONLY_MODULES.items():
+        if alias['base'] not in entries:
+            continue
+        metadata = [
+            path for folder in ('lib/pkgconfig', 'share/pkgconfig')
+            for path in (prefix / folder).glob(alias['pc'])
+            if path.is_file()
+        ]
+        require(len(metadata) == 1,
+                'Header-only module metadata is not uniquely installed: ' + name)
+        paths.add(metadata[0].relative_to(prefix).as_posix())
+        directory = regular(prefix, alias['include'], directory=True)
+        found = False
+        for path in directory.rglob('*'):
+            require(not path.is_symlink(), 'Symlink in header-only include inventory')
+            if path.is_file():
+                found = True
+                paths.add(path.relative_to(prefix).as_posix())
+        require(found, 'Empty header-only include inventory: ' + name)
     records = {}; counts = {}
     for name in sorted(paths):
         path = regular(prefix, name)
@@ -271,6 +299,10 @@ def load(manifest: Path, expected: str, prefix: Path, *, full=True) -> dict:
         # New headers can shadow a previously resolved include without changing
         # any existing file. Bind membership as well as bytes.
         directories = {p for e in value['modules'].values() for p in e['includes']}
+        directories.update(
+            alias['include'] for alias in HEADER_ONLY_MODULES.values()
+            if alias['base'] in value['modules']
+        )
         for directory in directories:
             for path in (prefix / directory).rglob('*'):
                 require(not path.is_symlink(), 'Redirected include tree')
@@ -298,6 +330,12 @@ def query(value: dict, prefix: Path, modules: list[str], patterns=()) -> list:
                     'Header-only module metadata is not uniquely frozen: ' + name)
             regular(prefix, metadata[0])
             directory = regular(prefix, alias['include'], directory=True)
+            members = [
+                path.relative_to(prefix).as_posix()
+                for path in directory.rglob('*') if path.is_file()
+            ]
+            require(members and all(path in value['files'] for path in members),
+                    'Header-only module bytes are not frozen: ' + name)
             includes.append(str(directory))
             continue
         entry = value['modules'][name]
@@ -305,11 +343,53 @@ def query(value: dict, prefix: Path, modules: list[str], patterns=()) -> list:
         cflags.extend(entry['cflags'])
         libs.extend(path if path in OS_LIBRARIES else str(prefix/path) for path in entry['libraries'])
         options.extend(entry['link_options'])
+    def raw_library(library: str) -> str:
+        if library in OS_LIBRARIES:
+            return '-l' + library
+        name = PurePosixPath(library).name
+        if name.startswith('lib') and name.endswith('.a') and len(name) > 5:
+            return '-l' + name[3:-2]
+        return library
+
     for pattern in patterns:
+        require(pattern in REVIEWED_FILTERS,
+                'Unreviewed GN static dependency filter: ' + pattern)
         regex = re.compile(pattern)
-        require(not any(regex.search(library) for library in libs), 'GN filter would discard a static dependency')
-        includes = [p for p in includes if not regex.search('-I'+p)]
-        cflags = [f for f in cflags if not regex.search(f)]
+        matched = False
+
+        kept_includes = []
+        for path in includes:
+            if regex.search('-I' + path):
+                matched = True
+            else:
+                kept_includes.append(path)
+        includes = kept_includes
+
+        kept_cflags = []
+        for flag in cflags:
+            if regex.search(flag):
+                matched = True
+            else:
+                kept_cflags.append(flag)
+        cflags = kept_cflags
+
+        kept_libs = []
+        for library in libs:
+            if regex.search(raw_library(library)):
+                matched = True
+            else:
+                kept_libs.append(library)
+        libs = kept_libs
+
+        kept_options = []
+        for option in options:
+            if regex.search(option):
+                matched = True
+            else:
+                kept_options.append(option)
+        options = kept_options
+
+        require(matched, 'Reviewed GN filter matched no frozen dependency: ' + pattern)
     return [list(dict.fromkeys(includes)), list(dict.fromkeys(cflags)), list(dict.fromkeys(libs)),
             [], list(dict.fromkeys(options))]
 
