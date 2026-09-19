@@ -141,6 +141,32 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'metadata is not uniquely frozen'):
             pc.query(value_without_pc, self.prefix, ['gtk+-unix-print-3.0'])
 
+    def test_gio_unix_is_header_only_and_manifest_bound(self):
+        (self.prefix/'include/gio-unix-2.0/gio').mkdir(parents=True)
+        (self.prefix/'include/gio-unix-2.0/gio/gunixfdlist.h').write_text(
+            'typedef int GUnixFDList;\n'
+        )
+        self.pc_file('gio-2.0', '-la -lb', '-I${includedir}')
+        self.pc_file(
+            'gio-unix-2.0',
+            '',
+            '-I${includedir}/gio-unix-2.0',
+        )
+        value = pc.capture(self.prefix, self.pkgconf, ['fixture', 'gio-2.0'])
+        self.assertNotIn('gio-unix-2.0', value['modules'])
+        result = pc.query(value, self.prefix, ['gio-unix-2.0'])
+        self.assertEqual(
+            result,
+            [[str(self.prefix/'include/gio-unix-2.0')], [], [], [], []],
+        )
+        header = 'include/gio-unix-2.0/gio/gunixfdlist.h'
+        self.assertIn(header, value['files'])
+        metadata = [
+            name for name in value['files']
+            if name.endswith('/gio-unix-2.0.pc')
+        ]
+        self.assertEqual(len(metadata), 1)
+
     def test_unknown_module_and_filter_cannot_remove_library(self):
         value=self.freeze()
         with self.assertRaisesRegex(ValueError,'uncaptured'):

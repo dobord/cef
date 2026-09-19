@@ -33,6 +33,11 @@ HEADER_ONLY_MODULES = {
         'include': 'include/gtk-3.0/unix-print',
         'pc': 'gtk+-unix-print-3.0.pc',
     },
+    'gio-unix-2.0': {
+        'base': 'gio-2.0',
+        'include': 'include/gio-unix-2.0',
+        'pc': 'gio-unix-2.0.pc',
+    },
 }
 
 # Chromium 152 has exactly two reviewed Linux pkg-config filters in the static

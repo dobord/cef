@@ -343,6 +343,21 @@ def patch_windows_rrect_ostream_include(root: Path) -> None:
 ''')
 
 
+def patch_windows_webrtc_memory_include(root: Path) -> None:
+    # Pinned WebRTC uses std::unique_ptr in the Windows protocol enumeration
+    # helper without including <memory>. libc++ previously exposed it
+    # transitively; the reviewed MSVC STL correctly requires the direct header.
+    replace(root, 'third_party/webrtc/rtc_base/net_test_helpers.cc',
+            '''#include "rtc_base/net_test_helpers.h"
+
+''',
+            '''#include "rtc_base/net_test_helpers.h"
+
+#include <memory>
+
+''')
+
+
 def patch_windows_angle_libcpp_private_include(root: Path) -> None:
     # ANGLE's WebGPU framebuffer source directly includes libc++'s private
     # <__config> header but does not use any symbol from it. Chromium's native
@@ -455,6 +470,7 @@ def patch(root: Path) -> None:
     patch_windows_msvc_consteval_language_tags(root)
     patch_windows_missing_string_include(root)
     patch_windows_rrect_ostream_include(root)
+    patch_windows_webrtc_memory_include(root)
     patch_windows_angle_libcpp_private_include(root)
     patch_windows_angle_move_only_render_target_container(root)
     patch_static_cefclient_pkgconfig(root)

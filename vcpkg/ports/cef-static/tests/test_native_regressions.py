@@ -81,6 +81,21 @@ class NativeGraphTests(unittest.TestCase):
             self.assertEqual(text.count('"gtk+-unix-print-3.0"'), 1)
             self.assertIn('packages += [ "gtk+-unix-print-3.0" ]', text)
 
+    def test_windows_webrtc_net_helper_gets_direct_memory_include(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'third_party/webrtc/rtc_base/net_test_helpers.cc'
+            target.parent.mkdir(parents=True)
+            target.write_text('''#include "rtc_base/net_test_helpers.h"
+
+''')
+            patcher.patch_windows_webrtc_memory_include(root)
+            self.assertEqual(target.read_text(), '''#include "rtc_base/net_test_helpers.h"
+
+#include <memory>
+
+''')
+
     def test_windows_angle_webgpu_uses_nonrelocating_outer_render_target_container(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
