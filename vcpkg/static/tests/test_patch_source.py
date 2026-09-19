@@ -12,6 +12,28 @@ spec.loader.exec_module(patch_source)
 
 
 class PatchSourceTests(unittest.TestCase):
+    def test_windows_msvc_emulation_matches_reviewed_native_stl(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / "build/config/win/BUILD.gn"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                '''config("compiler") {
+  if (is_clang) {
+    # Tell clang which version of MSVC to emulate.
+    cflags += [ "-fmsc-version=1934" ]
+  }
+}
+''',
+                encoding="utf-8",
+            )
+            patch_source.EDITS.clear()
+            patch_source.patch_windows_msvc_version(root)
+            changed = path.read_text()
+            self.assertNotIn('-fmsc-version=1934', changed)
+            self.assertEqual(changed.count('-fmsc-version=1944'), 1)
+            self.assertEqual(len(patch_source.EDITS), 1)
+
     def test_ctad_warning_remains_enabled_off_windows_only(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
