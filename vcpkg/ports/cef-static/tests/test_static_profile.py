@@ -20,7 +20,10 @@ class ProfileTests(unittest.TestCase):
         actual = builder.static_profile(original, False)
         self.assertNotIn('enable_linux_installer', actual)
         self.assertIn('enable_linux_installer', original)
-        self.assertEqual(actual, {k:v for k,v in original.items() if k!='enable_linux_installer'})
+        self.assertIs(actual['rtc_use_pipewire'], False)
+        expected = {k:v for k,v in original.items() if k!='enable_linux_installer'}
+        expected['rtc_use_pipewire'] = False
+        self.assertEqual(actual, expected)
     def test_windows_excludes_built_dxc_and_agility_dlls(self):
         original = {'is_component_build': False, 'cef_static_engine': True}
         actual = builder.static_profile(original, True)

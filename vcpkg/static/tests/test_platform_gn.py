@@ -42,6 +42,7 @@ pkg_config("dri") {
         args = gn.gn_args(Path('/manifest'), Path('/prefix'), 'a'*64)
         self.assertIs(args['use_vaapi'], False)
         self.assertIs(args['use_v4l2_codec'], False)
+        self.assertIs(args['rtc_use_pipewire'], False)
 
     def test_only_reviewed_cups_and_alsa_call_sites(self):
         cups=gn.patch_direct('printing/BUILD.gn','  if (is_chromeos_device) {\n')

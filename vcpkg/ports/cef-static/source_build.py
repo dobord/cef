@@ -394,6 +394,10 @@ def static_profile(merged: dict, windows: bool) -> dict:
                       v8_enable_sandbox=False)
     else:
         result.pop('enable_linux_installer', None)
+        # PipeWire desktop/camera capture in pinned Chromium is a runtime-loaded
+        # optional shared-library path. The static engine keeps X11 capture and
+        # disables this dynamic loader explicitly.
+        result['rtc_use_pipewire'] = False
     return result
 
 

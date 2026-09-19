@@ -179,7 +179,11 @@ def gn_args(manifest: Path, prefix: Path, sha256: str) -> dict:
             'cef_static_platform_prefix': str(prefix),
             'cef_static_platform_sha256': sha256,
             'use_sysroot': False, 'use_remoteexec': False, 'use_lld': True,
-            'use_vaapi': False, 'use_v4l2_codec': False}
+            'use_vaapi': False, 'use_v4l2_codec': False,
+            # Chromium/WebRTC PipeWire support is intentionally implemented
+            # through runtime dynamic loading. A fully static engine must not
+            # admit that optional runtime .so path; retain X11 capture instead.
+            'rtc_use_pipewire': False}
 
 
 def guard(source: Path, selection) -> None:
