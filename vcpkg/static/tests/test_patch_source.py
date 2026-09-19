@@ -116,5 +116,68 @@ config("no_exceptions") {
             self.assertEqual(len(patch_source.EDITS), 5)
 
 
+    def test_platform_stl_language_tags_avoid_constexpr_dynamic_storage(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            language = root / "base/i18n/language_tag.h"
+            language.parent.mkdir(parents=True)
+            language.write_text(
+                """consteval LanguageTag GetKnownLanguageTag(std::string_view tag) {
+  std::optional<i18n_internal::ParsedBcp47Tag> parsed =
+      i18n_internal::ParseBcp47Tag(tag);
+  if (!parsed) {
+    void ERROR_TagIsMalformed();
+    ERROR_TagIsMalformed();
+  }
+
+  if (!i18n_internal::AreSubtagsKnown(*parsed)) {
+    void ERROR_TagIsUnknown();
+    ERROR_TagIsUnknown();
+  }
+
+  // It is only possible to construct LanguageTags at compile-time if they
+  // are small.
+  if (tag.size() > i18n_internal::ImmutableString::kSmallBufferSize) {
+    void ERROR_TagIsTooLarge();
+    ERROR_TagIsTooLarge();
+  }
+
+  return LanguageTag(base::span<const std::string_view>({tag}));
+}
+
+constexpr std::optional<LanguageTag> LanguageTag::GetParentTag() const {
+""",
+                encoding="utf-8",
+            )
+            time_formatting = root / "base/i18n/time_formatting.cc"
+            time_formatting.parent.mkdir(parents=True)
+            time_formatting.write_text(
+                '  static constexpr i18n::LanguageTag en_us = i18n::GetKnownLanguageTag("en-US");\n',
+                encoding="utf-8",
+            )
+            patch_source.EDITS.clear()
+            patch_source.patch_windows_msvc_consteval_language_tags(root)
+            changed = language.read_text()
+            self.assertIn("#if defined(_MSVC_STL_UPDATE)", changed)
+            self.assertIn("std::string_view subtags[8]", changed)
+            self.assertIn("IsKnownLanguageSubtag", changed)
+            self.assertIn("IsKnownScriptSubtag", changed)
+            self.assertIn("IsKnownRegionSubtag", changed)
+            self.assertIn("IsKnownVariantSubtag", changed)
+            self.assertIn("seen_singletons", changed)
+            self.assertIn("IsExtensionSubtag", changed)
+            self.assertIn("IsPrivateUseSubtag", changed)
+            self.assertIn("#else", changed)
+            self.assertEqual(changed.count("i18n_internal::ParseBcp47Tag(tag)"), 1)
+            time_changed = time_formatting.read_text()
+            self.assertIn("#if defined(_MSVC_STL_UPDATE)", time_changed)
+            self.assertIn(
+                'constexpr i18n::LanguageTag en_us = i18n::GetKnownLanguageTag("en-US");',
+                time_changed,
+            )
+            self.assertIn("static constexpr i18n::LanguageTag en_us", time_changed)
+            self.assertEqual(len(patch_source.EDITS), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

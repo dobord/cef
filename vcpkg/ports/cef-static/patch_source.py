@@ -171,6 +171,147 @@ def patch_windows_msvc_stl_warnings(root: Path) -> None:
 ''')
 
 
+
+def patch_windows_msvc_consteval_language_tags(root: Path) -> None:
+    # Chromium 152 validates known BCP47 tags at compile time through a parser
+    # backed by std::optional/std::vector. clang-cl with the reviewed MSVC
+    # 14.44 STL cannot destroy that dynamic-container graph in constant
+    # evaluation. Preserve the same accepted known-tag contract on platform-STL
+    # targets with a bounded allocation-free parser; libc++ keeps upstream code.
+    replace(root, 'base/i18n/language_tag.h',
+            '''consteval LanguageTag GetKnownLanguageTag(std::string_view tag) {
+  std::optional<i18n_internal::ParsedBcp47Tag> parsed =
+''',
+            '''consteval LanguageTag GetKnownLanguageTag(std::string_view tag) {
+#if defined(_MSVC_STL_UPDATE)
+  void ERROR_TagIsMalformed();
+  void ERROR_TagIsUnknown();
+  void ERROR_TagIsTooLarge();
+
+  if (tag.empty()) {
+    ERROR_TagIsMalformed();
+  }
+  if (tag.size() > i18n_internal::ImmutableString::kSmallBufferSize) {
+    ERROR_TagIsTooLarge();
+  }
+
+  std::string_view subtags[8] = {};
+  size_t count = 0;
+  size_t start = 0;
+  while (true) {
+    if (count == 8) {
+      ERROR_TagIsMalformed();
+    }
+    size_t end = tag.find('-', start);
+    subtags[count] =
+        tag.substr(start, end == std::string_view::npos ? tag.size() - start
+                                                        : end - start);
+    if (subtags[count].empty()) {
+      ERROR_TagIsMalformed();
+    }
+    ++count;
+    if (end == std::string_view::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+
+  size_t index = 0;
+  if (!i18n_internal::IsLanguageSubtag(subtags[index])) {
+    ERROR_TagIsMalformed();
+  }
+  if (!i18n_internal::IsKnownLanguageSubtag(subtags[index])) {
+    ERROR_TagIsUnknown();
+  }
+  ++index;
+
+  if (index < count && i18n_internal::IsScriptSubtag(subtags[index])) {
+    if (!i18n_internal::IsKnownScriptSubtag(subtags[index])) {
+      ERROR_TagIsUnknown();
+    }
+    ++index;
+  }
+  if (index < count && i18n_internal::IsRegionSubtag(subtags[index])) {
+    if (!i18n_internal::IsKnownRegionSubtag(subtags[index])) {
+      ERROR_TagIsUnknown();
+    }
+    ++index;
+  }
+  while (index < count && i18n_internal::IsVariantSubtag(subtags[index])) {
+    if (!i18n_internal::IsKnownVariantSubtag(subtags[index])) {
+      ERROR_TagIsUnknown();
+    }
+    ++index;
+  }
+
+  unsigned long long seen_singletons = 0;
+  while (index < count &&
+         i18n_internal::IsExtensionSingleton(subtags[index])) {
+    char singleton = base::ToLowerASCII(subtags[index].front());
+    unsigned bit = base::IsAsciiDigit(singleton)
+                       ? static_cast<unsigned>(singleton - '0')
+                       : 10u + static_cast<unsigned>(singleton - 'a');
+    unsigned long long mask = 1ull << bit;
+    if (seen_singletons & mask) {
+      ERROR_TagIsMalformed();
+    }
+    seen_singletons |= mask;
+    ++index;
+    size_t extension_start = index;
+    while (index < count &&
+           i18n_internal::IsExtensionSubtag(subtags[index])) {
+      ++index;
+    }
+    if (index == extension_start) {
+      ERROR_TagIsMalformed();
+    }
+  }
+
+  if (index < count &&
+      (subtags[index] == "x" || subtags[index] == "X")) {
+    ++index;
+    size_t private_start = index;
+    while (index < count &&
+           i18n_internal::IsPrivateUseSubtag(subtags[index])) {
+      ++index;
+    }
+    if (index == private_start) {
+      ERROR_TagIsMalformed();
+    }
+  }
+  if (index != count) {
+    ERROR_TagIsMalformed();
+  }
+
+  return LanguageTag(base::span<const std::string_view>({tag}));
+#else
+  std::optional<i18n_internal::ParsedBcp47Tag> parsed =
+''')
+    replace(root, 'base/i18n/language_tag.h',
+            '''  return LanguageTag(base::span<const std::string_view>({tag}));
+}
+
+constexpr std::optional<LanguageTag> LanguageTag::GetParentTag() const {
+''',
+            '''  return LanguageTag(base::span<const std::string_view>({tag}));
+#endif
+}
+
+constexpr std::optional<LanguageTag> LanguageTag::GetParentTag() const {
+''')
+    # MSVC std::variant remains non-trivially destructible at runtime even
+    # when constant evaluation selected ImmutableString's stack alternative.
+    # Avoid static storage only for this local target-STL value.
+    replace(root, 'base/i18n/time_formatting.cc',
+            '  static constexpr i18n::LanguageTag en_us = i18n::GetKnownLanguageTag("en-US");\n',
+            '''#if defined(_MSVC_STL_UPDATE)
+  constexpr i18n::LanguageTag en_us = i18n::GetKnownLanguageTag("en-US");
+#else
+  static constexpr i18n::LanguageTag en_us = i18n::GetKnownLanguageTag("en-US");
+#endif
+''')
+
+
 def patch_gpu_init_filter_set(root: Path) -> None:
     # filter_set is read by either Vulkan or the ChromeOS Dawn filter. A
     # Vulkan-disabled non-ChromeOS Ozone build has neither reader. Keep both
@@ -214,6 +355,7 @@ def patch(root: Path) -> None:
     patch_dawn_ozone_dependencies(root)
     patch_windows_msvc_version(root)
     patch_windows_msvc_stl_warnings(root)
+    patch_windows_msvc_consteval_language_tags(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)
     replace(root, 'cef/libcef/features/features.gni', '  enable_cef = true\n',
