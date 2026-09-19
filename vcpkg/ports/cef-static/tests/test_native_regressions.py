@@ -81,6 +81,20 @@ class NativeGraphTests(unittest.TestCase):
             self.assertEqual(text.count('"gtk+-unix-print-3.0"'), 1)
             self.assertIn('packages += [ "gtk+-unix-print-3.0" ]', text)
 
+    def test_windows_rrect_stream_operator_gets_direct_ostream_include(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'ui/gfx/geometry/rrect_f.h'
+            target.parent.mkdir(parents=True)
+            target.write_text('''#include <memory>
+#include <string>
+''')
+            patcher.patch_windows_rrect_ostream_include(root)
+            self.assertEqual(target.read_text(), '''#include <memory>
+#include <ostream>
+#include <string>
+''')
+
     def test_windows_cert_util_gets_direct_string_include(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

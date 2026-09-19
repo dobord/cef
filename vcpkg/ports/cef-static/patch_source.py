@@ -328,6 +328,21 @@ def patch_windows_missing_string_include(root: Path) -> None:
 ''')
 
 
+def patch_windows_rrect_ostream_include(root: Path) -> None:
+    # Chromium's inline RRectF stream operator invokes operator<<(std::string)
+    # while the header includes <string> only. MSVC STL 14.44 intentionally
+    # leaves basic_ostream incomplete through iosfwd/string_view, so include
+    # the owning stream definition directly for this public inline function.
+    replace(root, 'ui/gfx/geometry/rrect_f.h',
+            '''#include <memory>
+#include <string>
+''',
+            '''#include <memory>
+#include <ostream>
+#include <string>
+''')
+
+
 def patch_static_cefclient_pkgconfig(root: Path) -> None:
     # The static engine root does not build cefclient. GN still evaluates the
     # cefclient pkg_config target while loading //cef/BUILD.gn, so do not query
@@ -403,6 +418,7 @@ def patch(root: Path) -> None:
     patch_windows_msvc_stl_warnings(root)
     patch_windows_msvc_consteval_language_tags(root)
     patch_windows_missing_string_include(root)
+    patch_windows_rrect_ostream_include(root)
     patch_static_cefclient_pkgconfig(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)
