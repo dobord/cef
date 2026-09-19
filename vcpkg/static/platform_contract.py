@@ -398,6 +398,30 @@ def query(value: dict, prefix: Path, modules: list[str], patterns=()) -> list:
             [], list(dict.fromkeys(options))]
 
 
+def normalize_gn_cli(argv: list[str]) -> list[str]:
+    """Match Chromium pkg-config.py handling of '-v <regexp>' exactly.
+
+    argparse treats a value such as '-lssl3' as a new option, while Chromium's
+    optparse consumes it as the value of -v. Normalize only the two reviewed
+    upstream filters before parsing; unknown filters remain fail-closed.
+    """
+    result = []
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token == '-v':
+            require(index + 1 < len(argv), 'Missing GN static dependency filter')
+            pattern = argv[index + 1]
+            require(pattern in REVIEWED_FILTERS,
+                    'Unreviewed GN static dependency filter: ' + pattern)
+            result.append('-v=' + pattern)
+            index += 2
+            continue
+        result.append(token)
+        index += 1
+    return result
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('operation', choices=('capture','verify','query','inputs'))
@@ -410,7 +434,7 @@ def main():
     p.add_argument('--version-as-components',action='store_true')
     p.add_argument('--libdir',action='store_true')
     p.add_argument('modules',nargs='*')
-    args = p.parse_intermixed_args()
+    args = p.parse_intermixed_args(normalize_gn_cli(sys.argv[1:]))
     prefix = args.prefix.resolve(strict=True)
     if args.operation == 'capture':
         require(args.pkgconf is not None and not args.manifest.exists(), 'Explicit pkgconf and fresh manifest required')

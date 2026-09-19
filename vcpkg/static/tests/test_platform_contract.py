@@ -156,6 +156,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(result[2], pc.query(copy.deepcopy(value), self.prefix, ['fixture'])[2])
         with self.assertRaisesRegex(ValueError,'Unreviewed GN static dependency filter'):
             pc.query(copy.deepcopy(value), self.prefix, ['fixture'], ['ssl3'])
+        with self.assertRaisesRegex(ValueError,'Unreviewed GN static dependency filter'):
+            pc.normalize_gn_cli(['query','fixture','-v','ssl3'])
 
     def test_only_reviewed_chromium_filters_remove_static_inputs(self):
         value=self.freeze()
@@ -176,6 +178,10 @@ class ContractTests(unittest.TestCase):
               '--prefix',str(self.prefix),'--sha256',self.sha,'fixture']
         result=self.run_cmd(*base)
         self.assertEqual(len(json.loads(result.stdout)),5)
+        # Chromium orders the package before extra_args and passes the NSS
+        # filter as two argv entries: "-v", "-lssl3".
+        filtered=self.run_cmd(*base,'-v','-lssl3')
+        self.assertEqual(json.loads(filtered.stdout),json.loads(result.stdout))
         self.assertEqual(json.loads(self.run_cmd(*base,'--atleast-version','1.2').stdout),True)
         self.assertEqual(json.loads(self.run_cmd(*base,'--atleast-version','2').stdout),False)
         self.assertEqual(json.loads(self.run_cmd(*base,'--version-as-components').stdout),[1,2,3])

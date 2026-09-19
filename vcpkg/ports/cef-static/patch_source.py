@@ -361,6 +361,24 @@ def patch_windows_angle_libcpp_private_include(root: Path) -> None:
 ''')
 
 
+def patch_windows_angle_move_only_render_target_container(root: Path) -> None:
+    # ANGLE's WebGPU RenderTargetWgpu is intentionally move-only. libc++ can
+    # grow vector<deque<RenderTargetWgpu>> through deque's move path, but MSVC
+    # STL 14.44 selects deque's apparent copy constructor during vector growth
+    # and then correctly rejects copying RenderTargetWgpu. The outer container
+    # only needs resize/index/range-for/clear, all provided by deque without
+    # relocating existing levels. Keep upstream storage everywhere else.
+    replace(root, 'third_party/angle/src/libANGLE/renderer/wgpu/TextureWgpu.h',
+            '''    using RenderTargetLevels = std::vector<std::deque<RenderTargetWgpu>>;
+''',
+            '''#if defined(_MSVC_STL_UPDATE)
+    using RenderTargetLevels = std::deque<std::deque<RenderTargetWgpu>>;
+#else
+    using RenderTargetLevels = std::vector<std::deque<RenderTargetWgpu>>;
+#endif
+''')
+
+
 def patch_static_cefclient_pkgconfig(root: Path) -> None:
     # The static engine root does not build cefclient. GN still evaluates the
     # cefclient pkg_config target while loading //cef/BUILD.gn, so do not query
@@ -438,6 +456,7 @@ def patch(root: Path) -> None:
     patch_windows_missing_string_include(root)
     patch_windows_rrect_ostream_include(root)
     patch_windows_angle_libcpp_private_include(root)
+    patch_windows_angle_move_only_render_target_container(root)
     patch_static_cefclient_pkgconfig(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)

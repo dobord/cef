@@ -81,6 +81,26 @@ class NativeGraphTests(unittest.TestCase):
             self.assertEqual(text.count('"gtk+-unix-print-3.0"'), 1)
             self.assertIn('packages += [ "gtk+-unix-print-3.0" ]', text)
 
+    def test_windows_angle_webgpu_uses_nonrelocating_outer_render_target_container(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'third_party/angle/src/libANGLE/renderer/wgpu/TextureWgpu.h'
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                '    using RenderTargetLevels = std::vector<std::deque<RenderTargetWgpu>>;\n'
+            )
+            patcher.patch_windows_angle_move_only_render_target_container(root)
+            text = target.read_text()
+            self.assertIn('#if defined(_MSVC_STL_UPDATE)', text)
+            self.assertIn(
+                'using RenderTargetLevels = std::deque<std::deque<RenderTargetWgpu>>;',
+                text,
+            )
+            self.assertIn(
+                'using RenderTargetLevels = std::vector<std::deque<RenderTargetWgpu>>;',
+                text,
+            )
+
     def test_windows_angle_webgpu_drops_private_libcpp_config_header(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
