@@ -183,7 +183,11 @@ def gn_args(manifest: Path, prefix: Path, sha256: str) -> dict:
             # Chromium/WebRTC PipeWire support is intentionally implemented
             # through runtime dynamic loading. A fully static engine must not
             # admit that optional runtime .so path; retain X11 capture instead.
-            'rtc_use_pipewire': False}
+            'rtc_use_pipewire': False,
+            # CEF does not expose Chrome Remote Desktop as an engine API.
+            # On Linux enable_remoting follows use_gtk and would otherwise
+            # evaluate remoting/host/linux's runtime-loaded PipeWire path.
+            'enable_remoting': False}
 
 
 def guard(source: Path, selection) -> None:

@@ -398,6 +398,10 @@ def static_profile(merged: dict, windows: bool) -> dict:
         # optional shared-library path. The static engine keeps X11 capture and
         # disables this dynamic loader explicitly.
         result['rtc_use_pipewire'] = False
+        # enable_remoting defaults true on Linux whenever use_gtk is true.
+        # Chromium Remote Desktop owns an independent PipeWire dlopen loader;
+        # exclude that optional product feature from the static CEF engine.
+        result['enable_remoting'] = False
     return result
 
 
