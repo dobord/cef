@@ -21,6 +21,18 @@ OS_LIBRARIES = frozenset({'c', 'm', 'dl', 'pthread', 'rt', 'resolv'})
 MODULE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.+-]*\Z')
 LINK_OPTIONS = frozenset({'-pthread', '-Wl,--export-dynamic'})
 KIND = 'linux-x64-static-platform-build-inputs'
+# Chromium's GTK3 stubs need <gtk/gtkunixprint.h>, but the corresponding
+# pkg-config file contributes no libraries: it only adds an include directory
+# and Requires the already captured GTK graph. Keep it outside the 37-module
+# link inventory while binding both its metadata and header path to the frozen
+# prefix.
+HEADER_ONLY_MODULES = {
+    'gtk+-unix-print-3.0': {
+        'base': 'gtk+-3.0',
+        'include': 'include/gtk-3.0/unix-print',
+        'pc': 'gtk+-unix-print-3.0.pc',
+    },
+}
 
 
 def require(condition, message):
@@ -273,7 +285,21 @@ def load(manifest: Path, expected: str, prefix: Path, *, full=True) -> dict:
 def query(value: dict, prefix: Path, modules: list[str], patterns=()) -> list:
     includes, cflags, libs, options = [], [], [], []
     for name in modules:
-        require(name in value['modules'], 'GN requested an uncaptured target module: ' + name)
+        if name not in value['modules']:
+            alias = HEADER_ONLY_MODULES.get(name)
+            require(alias is not None, 'GN requested an uncaptured target module: ' + name)
+            require(alias['base'] in value['modules'],
+                    'Header-only module lacks its captured base: ' + name)
+            metadata = [
+                path for path in value['files']
+                if PurePosixPath(path).name == alias['pc']
+            ]
+            require(len(metadata) == 1,
+                    'Header-only module metadata is not uniquely frozen: ' + name)
+            regular(prefix, metadata[0])
+            directory = regular(prefix, alias['include'], directory=True)
+            includes.append(str(directory))
+            continue
         entry = value['modules'][name]
         includes.extend(str(prefix / path) for path in entry['includes'])
         cflags.extend(entry['cflags'])

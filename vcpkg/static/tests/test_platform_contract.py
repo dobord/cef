@@ -107,6 +107,34 @@ class ContractTests(unittest.TestCase):
         self.run_cmd('ar','rcs',str(archive),'shared.o')
         with self.assertRaisesRegex(ValueError,'relocatable'): self.freeze()
 
+    def test_gtk_unix_print_is_header_only_and_manifest_bound(self):
+        (self.prefix/'include/gtk-3.0/unix-print/gtk').mkdir(parents=True)
+        (self.prefix/'include/gtk-3.0/unix-print/gtk/gtkunixprint.h').write_text(
+            'typedef int GtkPrintUnixDialog;\n'
+        )
+        self.pc_file('gtk+-3.0', '-la -lb', '-I${includedir}')
+        self.pc_file(
+            'gtk+-unix-print-3.0',
+            '',
+            '-I${includedir}/gtk-3.0/unix-print',
+        )
+        value = pc.capture(self.prefix, self.pkgconf, ['fixture', 'gtk+-3.0'])
+        self.assertNotIn('gtk+-unix-print-3.0', value['modules'])
+        result = pc.query(value, self.prefix, ['gtk+-unix-print-3.0'])
+        self.assertEqual(
+            result,
+            [[str(self.prefix/'include/gtk-3.0/unix-print')], [], [], [], []],
+        )
+        metadata = [
+            name for name in value['files']
+            if name.endswith('/gtk+-unix-print-3.0.pc')
+        ]
+        self.assertEqual(len(metadata), 1)
+        value_without_pc = copy.deepcopy(value)
+        del value_without_pc['files'][metadata[0]]
+        with self.assertRaisesRegex(ValueError, 'metadata is not uniquely frozen'):
+            pc.query(value_without_pc, self.prefix, ['gtk+-unix-print-3.0'])
+
     def test_unknown_module_and_filter_cannot_remove_library(self):
         value=self.freeze()
         with self.assertRaisesRegex(ValueError,'uncaptured'): pc.query(value,self.prefix,['unseen'])
