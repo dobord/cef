@@ -389,7 +389,11 @@ def query(value: dict, prefix: Path, modules: list[str], patterns=()) -> list:
                 kept_options.append(option)
         options = kept_options
 
-        require(matched, 'Reviewed GN filter matched no frozen dependency: ' + pattern)
+        # Chromium's pkg-config.py treats a reviewed -v regexp as a no-op
+        # when the selected package graph does not contain a matching flag.
+        # This is required for our consolidated cef-nss-static archive: the
+        # upstream -lssl3 exclusion remains present in GN, but nss.pc already
+        # omits ssl3 entirely. Exact filter names remain fail-closed above.
     return [list(dict.fromkeys(includes)), list(dict.fromkeys(cflags)), list(dict.fromkeys(libs)),
             [], list(dict.fromkeys(options))]
 

@@ -150,6 +150,13 @@ class ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Unreviewed GN static dependency filter'):
             pc.query(value,self.prefix,['fixture'],['FIXTURE'])
 
+    def test_reviewed_nss_filter_may_be_noop_for_consolidated_static_nss(self):
+        value=self.freeze()
+        result=pc.query(copy.deepcopy(value), self.prefix, ['fixture'], ['-lssl3'])
+        self.assertEqual(result[2], pc.query(copy.deepcopy(value), self.prefix, ['fixture'])[2])
+        with self.assertRaisesRegex(ValueError,'Unreviewed GN static dependency filter'):
+            pc.query(copy.deepcopy(value), self.prefix, ['fixture'], ['ssl3'])
+
     def test_only_reviewed_chromium_filters_remove_static_inputs(self):
         value=self.freeze()
         entry=value['modules']['fixture']
