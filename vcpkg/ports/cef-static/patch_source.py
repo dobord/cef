@@ -79,6 +79,17 @@ def patch_dawn_ozone_dependencies(root: Path) -> None:
 ''')
 
 
+def patch_windows_msvc_version(root: Path) -> None:
+    # Chromium 152 hard-codes Clang's emulated MSVC version to 19.34 while
+    # the reviewed Windows runner supplies MSVC STL 14.44. The mismatch changes
+    # STL feature macros/constexpr availability and breaks valid C++23 code in
+    # base/i18n. Match the exact reviewed native toolset; source_build.py
+    # independently fails closed unless that toolset is actually installed.
+    replace(root, 'build/config/win/BUILD.gn',
+            '    cflags += [ "-fmsc-version=1934" ]\n',
+            '    cflags += [ "-fmsc-version=1944" ]\n')
+
+
 def patch_windows_msvc_stl_warnings(root: Path) -> None:
     # Chromium's PartitionAlloc enables -Wctad-maybe-unsupported for all clang
     # builds. With the reviewed Windows platform STL this warns on valid
@@ -201,6 +212,7 @@ def patch_skia_x11_fallback(root: Path) -> None:
 def patch(root: Path) -> None:
     patch_vulkan_disabled(root)
     patch_dawn_ozone_dependencies(root)
+    patch_windows_msvc_version(root)
     patch_windows_msvc_stl_warnings(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)
