@@ -394,6 +394,37 @@ def patch_windows_angle_move_only_render_target_container(root: Path) -> None:
 ''')
 
 
+def patch_windows_cookie_string_view_iterators(root: Path) -> None:
+    # ParseRequestCookieLine accepts std::string_view, but pinned Chromium
+    # stores its iterators as std::string::const_iterator. libc++ historically
+    # aliases both to pointer-like iterators; MSVC STL uses distinct iterator
+    # types. Keep the algorithm unchanged and bind iterators to the view.
+    file = 'net/cookies/cookie_util.cc'
+    replace(root, file,
+            '''void ParseRequestCookieLine(std::string_view header_value,
+                            ParsedRequestCookies* parsed_cookies) {
+  std::string::const_iterator i = header_value.begin();
+''',
+            '''void ParseRequestCookieLine(std::string_view header_value,
+                            ParsedRequestCookies* parsed_cookies) {
+  std::string_view::const_iterator i = header_value.begin();
+''')
+    replace(root, file,
+            '''    // Find cookie name.
+    std::string::const_iterator cookie_name_beginning = i;
+''',
+            '''    // Find cookie name.
+    std::string_view::const_iterator cookie_name_beginning = i;
+''')
+    replace(root, file,
+            '''      ++i;  // Skip '='.
+      std::string::const_iterator cookie_value_beginning = i;
+''',
+            '''      ++i;  // Skip '='.
+      std::string_view::const_iterator cookie_value_beginning = i;
+''')
+
+
 def patch_static_cefclient_pkgconfig(root: Path) -> None:
     # The static engine root does not build cefclient. GN still evaluates the
     # cefclient pkg_config target while loading //cef/BUILD.gn, so do not query
@@ -473,6 +504,7 @@ def patch(root: Path) -> None:
     patch_windows_webrtc_memory_include(root)
     patch_windows_angle_libcpp_private_include(root)
     patch_windows_angle_move_only_render_target_container(root)
+    patch_windows_cookie_string_view_iterators(root)
     patch_static_cefclient_pkgconfig(root)
     patch_gpu_init_filter_set(root)
     patch_skia_x11_fallback(root)
