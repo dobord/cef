@@ -35,6 +35,16 @@ MODULES = (
     'gtk+-3.0', 'alsa', 'zlib', 'xshmfence',
 )
 
+# Chromium's pinned Linux Clang contributes one compiler-rt archive directly to
+# the final static root. It is not a platform dependency and therefore does not
+# belong in the frozen vcpkg prefix. Admit only this reviewed toolchain input,
+# and bind it to Chromium's own Clang package stamp.
+CLANG_PACKAGE_VERSION = 'llvmorg-23-init-19482-g53d18800-1'
+CLANG_STAMP = 'third_party/llvm-build/Release+Asserts/cr_build_revision'
+CLANG_RUNTIME_ARCHIVES = frozenset({
+    'third_party/llvm-build/Release+Asserts/lib/clang/23/lib/x86_64-unknown-linux-gnu/libclang_rt.builtins.a',
+})
+
 
 def git_blob(data: bytes) -> str:
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
@@ -195,9 +205,29 @@ def guard(source: Path, selection) -> None:
         raise ValueError('A static-platform source workspace requires its explicit pinned contract')
 
 
+def _reviewed_toolchain_archive(source: Path, path: Path) -> str | None:
+    """Return an exact pinned Chromium compiler runtime archive, or None."""
+    try:
+        relative = path.relative_to(source).as_posix()
+    except ValueError:
+        return None
+    if relative not in CLANG_RUNTIME_ARCHIVES:
+        return None
+    stamp = source / CLANG_STAMP
+    contract.require(stamp.is_file() and not stamp.is_symlink(),
+                     'Pinned Chromium Clang stamp is missing or redirected')
+    version = stamp.read_text(encoding='utf-8').strip().partition(',')[0]
+    contract.require(version == CLANG_PACKAGE_VERSION,
+                     'Pinned Chromium Clang package revision changed')
+    contract.require(path.is_file(),
+                     'Pinned Chromium compiler runtime archive is missing')
+    return relative
+
+
 def audit_graph(root: dict, source: Path, out: Path, prefix: Path, value: dict) -> dict:
     """GN's final libs may also bypass pkg_config: reject every unbound input."""
     seen = []
+    toolchain = []
     source, out, prefix = (p.resolve() for p in (source, out, prefix))
     allowed = set(value['archive_objects'])
     for library in root.get('libs', []):
@@ -218,7 +248,12 @@ def audit_graph(root: dict, source: Path, out: Path, prefix: Path, value: dict) 
             contract.require(name in allowed, 'GN linked an uncaptured target archive: ' + library)
             seen.append(name)
         else:
-            contract.require(path.is_relative_to(out), 'GN archive outside target prefix or native build: ' + library)
+            if path.is_relative_to(out):
+                continue
+            reviewed = _reviewed_toolchain_archive(source, path)
+            contract.require(reviewed is not None,
+                             'GN archive outside target prefix or native build: ' + library)
+            toolchain.append(reviewed)
     for directory in root.get('lib_dirs', []):
         path = source/directory[2:] if directory.startswith('//') else out/directory
         contract.require(path.resolve().is_relative_to(out), 'External GN library search directory: ' + directory)
@@ -227,7 +262,9 @@ def audit_graph(root: dict, source: Path, out: Path, prefix: Path, value: dict) 
                          'Hidden GN library search in ldflags: ' + flag)
     contract.require(seen, 'GN root contains no captured platform archives')
     return {'schema':1, 'status':'static-platform-graph-verified',
-            'archives':list(dict.fromkeys(seen)), 'runtime_verified':False}
+            'archives':list(dict.fromkeys(seen)),
+            'toolchain_archives':list(dict.fromkeys(toolchain)),
+            'runtime_verified':False}
 
 
 def main():

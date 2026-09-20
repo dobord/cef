@@ -80,6 +80,29 @@ pkg_config("dri") {
                 with self.subTest(field=field),self.assertRaises(ValueError):
                     gn.audit_graph(bad,source,out,prefix,value)
 
+    def test_graph_accepts_only_pinned_clang_builtins_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';out=source/'out';prefix=root/'prefix'
+            platform=prefix/'lib/libtarget.a';platform.parent.mkdir(parents=True);platform.write_bytes(b'a')
+            runtime=source/next(iter(gn.CLANG_RUNTIME_ARCHIVES))
+            runtime.parent.mkdir(parents=True);runtime.write_bytes(b'b')
+            stamp=source/gn.CLANG_STAMP
+            stamp.write_text(gn.CLANG_PACKAGE_VERSION+'\n')
+            value={'archive_objects':{'lib/libtarget.a':1}}
+            graph={'libs':[str(platform),'//'+runtime.relative_to(source).as_posix(),'m'],
+                   'ldflags':['-pthread']}
+            result=gn.audit_graph(graph,source,out,prefix,value)
+            self.assertEqual(result['toolchain_archives'],[runtime.relative_to(source).as_posix()])
+            stamp.write_text('different-clang\n')
+            with self.assertRaisesRegex(ValueError,'Clang package revision changed'):
+                gn.audit_graph(graph,source,out,prefix,value)
+            stamp.write_text(gn.CLANG_PACKAGE_VERSION+'\n')
+            other=source/'third_party/llvm-build/Release+Asserts/lib/libunexpected.a'
+            other.parent.mkdir(parents=True,exist_ok=True);other.write_bytes(b'c')
+            with self.assertRaisesRegex(ValueError,'outside target prefix'):
+                gn.audit_graph(dict(graph,libs=graph['libs']+[str(other)]),
+                               source,out,prefix,value)
+
     def test_binding_marker_never_silently_falls_back(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
