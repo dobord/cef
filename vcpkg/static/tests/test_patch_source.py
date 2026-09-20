@@ -150,7 +150,7 @@ constexpr std::optional<LanguageTag> LanguageTag::GetParentTag() const {
                 encoding="utf-8",
             )
             time_formatting = root / "base/i18n/time_formatting.cc"
-            time_formatting.parent.mkdir(parents=True)
+            time_formatting.parent.mkdir(parents=True, exist_ok=True)
             time_formatting.write_text(
                 '  static constexpr i18n::LanguageTag en_us = i18n::GetKnownLanguageTag("en-US");\n',
                 encoding="utf-8",
