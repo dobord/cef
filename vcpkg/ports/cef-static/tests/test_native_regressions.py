@@ -96,6 +96,25 @@ class NativeGraphTests(unittest.TestCase):
 
 ''')
 
+    def test_windows_cookie_parser_uses_string_view_iterators(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'net/cookies/cookie_util.cc'
+            target.parent.mkdir(parents=True)
+            target.write_text('''void ParseRequestCookieLine(std::string_view header_value,
+                            ParsedRequestCookies* parsed_cookies) {
+  std::string::const_iterator i = header_value.begin();
+    // Find cookie name.
+    std::string::const_iterator cookie_name_beginning = i;
+      ++i;  // Skip '='.
+      std::string::const_iterator cookie_value_beginning = i;
+}
+''')
+            patcher.patch_windows_cookie_string_view_iterators(root)
+            text = target.read_text()
+            self.assertEqual(text.count('std::string_view::const_iterator'), 3)
+            self.assertNotIn('std::string::const_iterator', text)
+
     def test_windows_angle_webgpu_uses_nonrelocating_outer_render_target_container(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
