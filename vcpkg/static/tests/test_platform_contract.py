@@ -211,6 +211,9 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(json.loads(self.run_cmd(*base,'--atleast-version','1.2').stdout),True)
         self.assertEqual(json.loads(self.run_cmd(*base,'--atleast-version','2').stdout),False)
         self.assertEqual(json.loads(self.run_cmd(*base,'--version-as-components').stdout),[1,2,3])
+        libdir=self.run_cmd(*base,'--libdir').stdout
+        self.assertEqual(libdir,str(self.prefix/'lib'))
+        self.assertFalse(libdir.endswith('\n'))
         base[2]='inputs';base.pop()
         self.assertIn(str(self.prefix/'include/value.h'),json.loads(self.run_cmd(*base).stdout))
 
