@@ -457,7 +457,11 @@ def main():
     elif args.atleast_version or args.version_as_components or args.libdir:
         require(len(args.modules)==1 and args.modules[0] in value['modules'], 'Expected one captured module')
         entry=value['modules'][args.modules[0]]
-        if args.libdir: print(prefix/entry['libdir'])
+        if args.libdir:
+            # Chromium consumes --libdir with exec_script(..., "string").
+            # Match upstream pkg-config.py exactly: no trailing newline may
+            # enter GN defines such as ATK_LIB_DIR.
+            sys.stdout.write(str(prefix/entry['libdir']))
         elif args.version_as_components: print(json.dumps([int(p) for p in entry['version'].split('.')]))
         else:
             require(re.fullmatch(r'\d+(?:\.\d+)*',args.atleast_version), 'Invalid version requirement')
