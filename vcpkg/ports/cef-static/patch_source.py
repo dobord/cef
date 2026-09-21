@@ -328,6 +328,15 @@ def patch_windows_missing_string_include(root: Path) -> None:
 ''')
 
 
+def patch_windows_websocket_string_include(root: Path) -> None:
+    # websocket_handshake_challenge.h exposes std::string while including only
+    # <string_view>. libc++ previously provided a transitive declaration; the
+    # reviewed MSVC STL 14.44 requires the owning header directly.
+    replace(root, 'net/websockets/websocket_handshake_challenge.h',
+            '''#include <string_view>\n''',
+            '''#include <string>\n#include <string_view>\n''')
+
+
 def patch_windows_rrect_ostream_include(root: Path) -> None:
     # Chromium's inline RRectF stream operator invokes operator<<(std::string)
     # while the header includes <string> only. MSVC STL 14.44 intentionally
@@ -500,6 +509,7 @@ def patch(root: Path) -> None:
     patch_windows_msvc_stl_warnings(root)
     patch_windows_msvc_consteval_language_tags(root)
     patch_windows_missing_string_include(root)
+    patch_windows_websocket_string_include(root)
     patch_windows_rrect_ostream_include(root)
     patch_windows_webrtc_memory_include(root)
     patch_windows_angle_libcpp_private_include(root)

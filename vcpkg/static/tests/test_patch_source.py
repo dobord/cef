@@ -116,6 +116,31 @@ config("no_exceptions") {
             self.assertEqual(len(patch_source.EDITS), 5)
 
 
+    def test_websocket_handshake_declares_string_directly_for_msvc_stl(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / "net/websockets/websocket_handshake_challenge.h"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                """#ifndef NET_WEBSOCKETS_WEBSOCKET_HANDSHAKE_CHALLENGE_H_
+#define NET_WEBSOCKETS_WEBSOCKET_HANDSHAKE_CHALLENGE_H_
+
+#include <string_view>
+
+#include "net/base/net_export.h"
+
+NET_EXPORT std::string ComputeSecWebSocketAccept(std::string_view key);
+#endif
+""",
+                encoding="utf-8",
+            )
+            patch_source.EDITS.clear()
+            patch_source.patch_windows_websocket_string_include(root)
+            changed = path.read_text()
+            self.assertIn("#include <string>\n#include <string_view>", changed)
+            self.assertEqual(changed.count("#include <string>"), 1)
+            self.assertEqual(len(patch_source.EDITS), 1)
+
     def test_platform_stl_language_tags_avoid_constexpr_dynamic_storage(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
