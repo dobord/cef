@@ -68,7 +68,7 @@ pkg_config("dri") {
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'source';out=source/'out';prefix=root/'prefix'
             value={'archive_objects':{'lib/libtarget.a':2}}
-            atomic=prefix/'lib/libatomic.a';atomic.write_bytes(b'b')
+            atomic=prefix/'lib/libatomic.a';atomic.parent.mkdir(parents=True);atomic.write_bytes(b'b')
             value['archive_objects']['lib/libatomic.a']=1
             base={'libs':[str(prefix/'lib/libtarget.a'),'atomic','m'], 'ldflags':['-pthread']}
             result=gn.audit_graph(base,source,out,prefix,value)
