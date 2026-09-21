@@ -240,7 +240,16 @@ def audit_graph(root: dict, source: Path, out: Path, prefix: Path, value: dict) 
         elif '/' in library:
             path = out/library
         else:
-            raise ValueError('Unresolved non-OS GN library bypasses the static contract: ' + library)
+            contract.require(
+                re.fullmatch(r'[A-Za-z0-9_+.-]+', library) is not None,
+                'Unsafe bare GN library name: ' + library,
+            )
+            captured = 'lib/lib' + library + '.a'
+            contract.require(
+                captured in allowed,
+                'Unresolved non-OS GN library bypasses the static contract: ' + library,
+            )
+            path = prefix/captured
         path = path.resolve()
         contract.require(path.suffix == '.a', 'Shared/nonarchive GN library: ' + library)
         if path.is_relative_to(prefix):

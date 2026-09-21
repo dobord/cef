@@ -68,10 +68,13 @@ pkg_config("dri") {
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);source=root/'source';out=source/'out';prefix=root/'prefix'
             value={'archive_objects':{'lib/libtarget.a':2}}
-            base={'libs':[str(prefix/'lib/libtarget.a'),'m'], 'ldflags':['-pthread']}
+            atomic=prefix/'lib/libatomic.a';atomic.write_bytes(b'b')
+            value['archive_objects']['lib/libatomic.a']=1
+            base={'libs':[str(prefix/'lib/libtarget.a'),'atomic','m'], 'ldflags':['-pthread']}
             result=gn.audit_graph(base,source,out,prefix,value)
             self.assertFalse(result['runtime_verified'])
-            for library in ('target','/usr/lib/libtarget.a',str(prefix/'lib/other.a'),str(out/'libstub.so')):
+            self.assertIn('lib/libatomic.a', result['archives'])
+            for library in ('uncaptured','/usr/lib/libtarget.a',str(prefix/'lib/other.a'),str(out/'libstub.so')):
                 bad=dict(base,libs=base['libs']+[library])
                 with self.subTest(library=library),self.assertRaises(ValueError):
                     gn.audit_graph(bad,source,out,prefix,value)
