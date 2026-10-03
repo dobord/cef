@@ -337,7 +337,7 @@ def windows_archive_targets(names: list[str]) -> list[str]:
 
 
 def export(source: Path, out: Path, diagnostics: Path, prefix: Path,
-           *, platform_inputs: dict | None = None) -> None:
+           *, platform_inputs: dict | None = None, cpp_client_enabled: bool = False) -> None:
     windows = os.name == 'nt'
     receipt = json.loads((diagnostics/'engine-build-receipt.json').read_text())
     verify_reference(receipt)
@@ -503,6 +503,9 @@ def export(source: Path, out: Path, diagnostics: Path, prefix: Path,
     for required in ('cef_version.h','cef_config.h','cef_api_versions.h','capi/cef_app_capi.h'):
         if not (include/required).is_file():
             raise RuntimeError('Missing generated public header: '+required)
+    if cpp_client_enabled:
+        from cpp_client import stage as stage_cpp_client
+        stage_cpp_client(source/'cef', prefix)
     resource_dir = share/'resources'; resource_dir.mkdir()
     for name in ('icudtl.dat','resources.pak','chrome_100_percent.pak','chrome_200_percent.pak',
                  'snapshot_blob.bin','v8_context_snapshot.bin'):
@@ -544,6 +547,7 @@ def main() -> None:
     p.add_argument('--out',type=Path,required=True)
     p.add_argument('--diagnostics',type=Path,required=True)
     p.add_argument('--prefix',type=Path,required=True)
+    p.add_argument('--cpp-client', action='store_true')
     p.add_argument('--platform-manifest', type=Path)
     p.add_argument('--platform-prefix', type=Path)
     p.add_argument('--platform-sha256')
@@ -555,7 +559,7 @@ def main() -> None:
         'manifest': str(a.platform_manifest.resolve()),
         'prefix': str(a.platform_prefix.resolve()), 'sha256': a.platform_sha256}
     export(a.source.resolve(),a.out.resolve(),a.diagnostics.resolve(),a.prefix.resolve(),
-           platform_inputs=selection)
+            platform_inputs=selection, cpp_client_enabled=a.cpp_client)
 
 if __name__=='__main__':
     main()

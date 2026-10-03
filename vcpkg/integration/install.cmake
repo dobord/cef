@@ -95,6 +95,7 @@ elseif(_mode STREQUAL "source")
             --source "${_work}/download/chromium/src"
             --out "${_work}/download/chromium/src/out/${_cef_out}"
             --diagnostics "${_logs}" --prefix "${CURRENT_PACKAGES_DIR}"
+            --cpp-client
             ${_platform_export_args}
         WORKING_DIRECTORY "${CURRENT_BUILDTREES_DIR}"
         LOGNAME cef-native-export
@@ -103,44 +104,62 @@ else()
     message(FATAL_ERROR "Unsupported CEF acquisition mode; no implicit fallback")
 endif()
 
-# High-level CEF client headers use a small client-side logging implementation.
-# Build it with the vcpkg consumer toolchain instead of importing Chromium's
-# C++ runtime. CEF::static remains the C-API engine target; CEF::cpp opts into
-# this companion archive and preserves the static engine boundary.
-vcpkg_cmake_configure(
-    SOURCE_PATH "${CEF_RECIPE_SOURCE}/vcpkg/ports/cef-static/cpp_support"
-    OPTIONS
-        "-DCEF_RECIPE_SOURCE=${CEF_RECIPE_SOURCE}"
-        "-DCEF_PACKAGE_PREFIX=${CURRENT_PACKAGES_DIR}"
-)
-vcpkg_cmake_install()
-if(VCPKG_TARGET_IS_WINDOWS)
-    set(_cef_cpp_archive "cef_cpp_support.lib")
-else()
-    set(_cef_cpp_archive "libcef_cpp_support.a")
-endif()
-if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/cef-static/${_cef_cpp_archive}")
-    message(FATAL_ERROR "CEF C++ client support archive was not installed")
-endif()
 set(_cef_config "${CURRENT_PACKAGES_DIR}/share/cef-static/cef-static-config.cmake")
 if(NOT EXISTS "${_cef_config}")
     message(FATAL_ERROR "CEF static CMake config is missing")
 endif()
-file(APPEND "${_cef_config}" "
+if(EXISTS "${CURRENT_PACKAGES_DIR}/share/cef-static/cpp-client/sources.cmake")
+    # Build the translated C++ client with the consumer toolchain. Its isolated
+    # identities cannot bind to Chromium's internal C++ implementations. Engine
+    # calls and callbacks cross the public C ABI; CEF::static remains CAPI-only.
+    vcpkg_cmake_configure(
+        SOURCE_PATH "${CEF_RECIPE_SOURCE}/vcpkg/ports/cef-static/cpp_support"
+        OPTIONS
+            "-DCEF_RECIPE_SOURCE=${CEF_RECIPE_SOURCE}"
+            "-DCEF_PACKAGE_PREFIX=${CURRENT_PACKAGES_DIR}"
+    )
+    vcpkg_cmake_install()
+    if(VCPKG_TARGET_IS_WINDOWS)
+        set(_cef_cpp_archive "cef_cpp_support.lib")
+    else()
+        set(_cef_cpp_archive "libcef_cpp_support.a")
+    endif()
+    if(NOT EXISTS "${CURRENT_PACKAGES_DIR}/lib/cef-static/${_cef_cpp_archive}")
+        message(FATAL_ERROR "CEF C++ client support archive was not installed")
+    endif()
+    # Translated implementations are build inputs, not installed SDK payload.
+    file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/share/cef-static/cpp-client")
+    file(APPEND "${_cef_config}" "
 # vcpkg-built C++ client support. The engine target itself remains CAPI-only.
+get_filename_component(_cef_cpp_prefix \"\${CMAKE_CURRENT_LIST_DIR}/../..\" ABSOLUTE)
 if(NOT TARGET CEF::cpp-support)
-  add_library(CEF::cpp-support STATIC IMPORTED)
-  get_filename_component(_cef_cpp_prefix \"\${CMAKE_CURRENT_LIST_DIR}/../..\" ABSOLUTE)
+  add_library(CEF::cpp-support STATIC IMPORTED GLOBAL)
   set_target_properties(CEF::cpp-support PROPERTIES
     IMPORTED_LOCATION \"\${_cef_cpp_prefix}/lib/cef-static/${_cef_cpp_archive}\")
 endif()
 if(NOT TARGET CEF::cpp)
-  add_library(CEF::cpp INTERFACE IMPORTED)
+  add_library(CEF::cpp INTERFACE IMPORTED GLOBAL)
   set_property(TARGET CEF::cpp PROPERTY INTERFACE_LINK_LIBRARIES
     \"CEF::cpp-support;CEF::static\")
+  set_property(TARGET CEF::cpp PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+    \"\${_cef_cpp_prefix}/include/cef-static-cpp\")
+  set_property(TARGET CEF::cpp PROPERTY INTERFACE_COMPILE_FEATURES cxx_std_20)
+  if(MSVC)
+    set_property(TARGET CEF::cpp PROPERTY INTERFACE_COMPILE_OPTIONS
+      \"$<$<COMPILE_LANGUAGE:CXX>:/FI\${_cef_cpp_prefix}/include/cef-static-cpp/include/cef_static_client_names.h>\")
+  else()
+    set_property(TARGET CEF::cpp PROPERTY INTERFACE_COMPILE_OPTIONS
+      \"$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include \\\"\${_cef_cpp_prefix}/include/cef-static-cpp/include/cef_static_client_names.h\\\">\")
+  endif()
 endif()
 set(CEF_STATIC_CPP_API TRUE)
-")
+    ")
+elseif(_mode STREQUAL "source")
+    message(FATAL_ERROR "Source-built CEF is missing its translated C++ client")
+else()
+    # Older engine-only release imports remain usable by C API consumers.
+    file(APPEND "${_cef_config}" "\nset(CEF_STATIC_CPP_API FALSE)\n")
+endif()
 
 file(COPY_FILE "${CEF_BUILD_CONTRACT_FILE}"
     "${CURRENT_PACKAGES_DIR}/share/cef-static/build-contract.json")

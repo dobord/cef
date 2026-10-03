@@ -40,7 +40,9 @@ def main() -> None:
     (evidence / "acquisition.json").write_bytes(sdk_import.sdk.json_bytes(acquisition))
     shutil.copyfile(prefix / "share/cef-static/static-link-inventory.json", evidence / "upstream-link-inventory.json")
     shutil.rmtree(work / "download")
-    if windows:
+    # Legacy engine-only releases have no translated C++ client staging. Their
+    # independent C API consumer remains the import qualification contract.
+    if windows and (prefix / "share/cef-static/cpp-client/sources.cmake").is_file():
         cpp_build = work / "cpp-support-build"
         cpp_install = work / "cpp-support-install"
         run([

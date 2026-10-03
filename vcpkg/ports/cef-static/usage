@@ -12,6 +12,13 @@ cef_execute_process in every child process as in the controlled test fixture.
 The ordinary C++ libcef_dll_wrapper is NOT ABI-compatible with this package and
 must NOT be linked into the same program.
 
+The source integration also provides CEF::cpp: a complete upstream C++ client
+translation layer built with the consumer toolchain. Link that target instead
+of calling Chromium's C++ implementations through CEF::static. Its private
+client headers and C++ symbol identities are propagated by the target; engine
+calls and callbacks use the public C ABI. The client does not import Chromium's
+STL, scoped_refptr calling convention, or C++ object ownership across that ABI.
+
 Windows consumers must use /MT, matching the release engine, not /MTd or /MD.
 The OS Win32 DLLs remain dynamic. Linux system libraries (libc, X11, NSS, etc.)
 remain platform dependencies. This is a static CEF engine, not a statically

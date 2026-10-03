@@ -10,6 +10,20 @@
 
 На Linux удалён только `enable_linux_installer` из параметров upstream-дистрибутива: installer не входит в выбранную статическую GN root-цель. `--fail-on-unused-args` сохранён; произвольные неизвестные аргументы не отбрасываются.
 
+## C++ consumer поверх статического C API
+
+Source integration предоставляет `CEF::cpp`. Эта цель собирает полный набор
+upstream client-side переводчиков C++ ↔ C API компилятором consumer и передаёт
+его заголовки и параметры всем зависимым C++ translation units. Имена C++ типов,
+entry points и вспомогательных namespaces изолированы от реализаций внутри
+Chromium; C ABI и исходные заголовки `CEF::static` не меняются.
+
+В клиентской копии заголовков `trivial_abi` отключён: GCC и Clang должны одинаково
+передавать non-trivial smart pointers и callbacks. Объекты STL и `CefRefPtr`
+не передаются непосредственно между consumer и engine. Для C++ приложения
+нужно линковать `CEF::cpp`, а не обычный `libcef_dll_wrapper` и не прямые
+C++ entry points из `CEF::static`.
+
 ## Первичные исходники
 
 CEF `708dc140cbc3286826a8abef89dc23a44ff9ea72`; Chromium `79460ebecaa5625e57a5fb679a735659e73dc687`; Dawn `ab8827bc57b176eeaa89f71324130c02d4d41145` из Chromium DEPS.
