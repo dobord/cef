@@ -101,6 +101,8 @@ def main():
   use_remoteexec = false
   use_vaapi = false
   use_v4l2_codec = false
+  rtc_use_pipewire = true
+  enable_remoting = true
 }
 current_cpu = target_cpu
 is_linux = true
