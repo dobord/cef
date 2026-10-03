@@ -151,7 +151,12 @@ add_executable(smoke "${CEF_STATIC_SMOKE_SOURCE}")
             r'-DCEF_STATIC_SMOKE_SOURCE=D:\a\cef\cef\vcpkg\ports\cef-static\smoke.c'],
             'legacy-escape-control', succeeds=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Invalid character escape '\\a'", result.stdout+result.stderr)
+        diagnostics = result.stdout + result.stderr
+        # Recent CMake preserves cache backslashes instead of parsing them as
+        # escapes. The same malformed argument must still reject the source.
+        if "Invalid character escape '\\a'" not in diagnostics:
+            self.assertIn('Cannot find source file:', diagnostics)
+            self.assertIn(r'D:\a\cef\cef\vcpkg\ports\cef-static\smoke.c', diagnostics)
         self.report['cases'].append({'case': 'legacy-escape-control', 'expected_failure': True})
         self.record()
 
