@@ -1818,7 +1818,7 @@ coverage workflows.
 
 ### Installer is skipped
 - Verify `CEF_INSTALLER_CONFIG` resource exists in client DLL
-- Use Resource Hacker or similar to inspect the DLL
+- Use Resource Hacker or [Resource Cracker](https://www.pelock.com/products/resource-cracker) or similar to inspect the DLL
 
 ### Version not found
 - Check `vmin`/`vmax` range matches available versions

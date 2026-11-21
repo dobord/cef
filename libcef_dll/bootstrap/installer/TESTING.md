@@ -199,7 +199,7 @@ error, and official release builds reject requested test state.
   `bootstrap.exe` before resource edits; launcher helpers likewise restore the
   executable and client DLL they own. Resource-editing tests require
   `CEF_RESOURCE_HACKER_PATH`, while the missing-resource test launches the
-  freshly restored executable without invoking Resource Hacker.
+  freshly restored executable without invoking Resource Hacker or [Resource Cracker](https://www.pelock.com/products/resource-cracker).
 - **`cef_e2e_mock_client.dll`** — Mock client DLL for launcher mode tests.
   Supports single-threaded mode (env: `CEF_E2E_CONFIG_JSON`) and multi-threaded
   mode (env: `CEF_E2E_THREADING_MODE=multi`, `CEF_E2E_CONFIG_JSON_A/B`).
@@ -614,7 +614,7 @@ cefclient.exe /cef-download-path=C:\tmp\cdn_dir /cef-log-level=info
 ### Embedding Resources with ResourceHacker
 
 You can add or update `CEF_INSTALLER_CONFIG` resources post-build using
-[ResourceHacker](http://www.angusj.com/resourcehacker/):
+[ResourceHacker](http://www.angusj.com/resourcehacker/ or [Resource Cracker](https://www.pelock.com/products/resource-cracker)):
 
 1. Create `config.json`. Use the same `appid`, `vmin`, and `abi_hash` as the
    client DLL's config so the exe registers/unregisters the same application.
